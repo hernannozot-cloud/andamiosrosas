@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="UTF-8">
+<title>logic.js tests</title>
+<style>
+  body { font-family: monospace; padding: 24px; background: #fff; color: #111; }
+  .pass { color: #1a9e5c; }
+  .fail { color: #c9105f; font-weight: bold; }
+  #summary { font-size: 1.1rem; margin-top: 16px; font-weight: bold; }
+  li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<h1>logic.js test results</h1>
+<ul id="results"></ul>
+<div id="summary"></div>
+
+<script src="../logic.js"></script>
+<script>
+(function () {
+  const results = document.getElementById('results');
+  let pass = 0;
+  let fail = 0;
+
+  function assertEqual(actual, expected, name) {
+    const ok = JSON.stringify(actual) === JSON.stringify(expected);
+    log(ok, name, ok ? '' : `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+
+  function assertTrue(actual, name) {
+    log(!!actual, name, actual ? '' : 'expected truthy value');
+  }
+
+  function log(ok, name, detail) {
+    ok ? pass++ : fail++;
+    const li = document.createElement('li');
+    li.className = ok ? 'pass' : 'fail';
+    li.textContent = (ok ? '✓ ' : '✗ ') + name + (detail ? ` — ${detail}` : '');
+    results.appendChild(li);
+  }
+
+  // formatoMXN
+  assertEqual(AR.formatoMXN(110), '$110', 'formatoMXN formats whole pesos without decimals');
+  assertTrue(AR.formatoMXN(1000).includes('1,000'), 'formatoMXN groups thousands');
+
+  // distanciaKm — Toluca to itself is 0
+  assertEqual(Math.round(AR.distanciaKm(AR.TOLUCA_LAT, AR.TOLUCA_LON, AR.TOLUCA_LAT, AR.TOLUCA_LON)), 0, 'distanciaKm(Toluca, Toluca) is 0');
+  // Toluca to Mexico City center (~19.4326,-99.1332) is roughly 55-70km
+  const distCdmx = AR.distanciaKm(AR.TOLUCA_LAT, AR.TOLUCA_LON, 19.4326, -99.1332);
+  assertTrue(distCdmx > 40 && distCdmx < 80, 'distanciaKm(Toluca, CDMX) is in a plausible range (' + distCdmx.toFixed(1) + 'km)');
+
+  // validateFeedback
+  assertEqual(AR.validateFeedback({ rating: 0, comentario: '' }), { valid: false, error: 'Agrega una calificación o un comentario antes de enviar.' }, 'validateFeedback rejects empty rating and comment');
+  assertEqual(AR.validateFeedback({ rating: 0, comentario: '   ' }), { valid: false, error: 'Agrega una calificación o un comentario antes de enviar.' }, 'validateFeedback rejects whitespace-only comment with no rating');
+  assertEqual(AR.validateFeedback({ rating: 4, comentario: '' }), { valid: true, error: null }, 'validateFeedback accepts a rating alone');
+  assertEqual(AR.validateFeedback({ rating: 0, comentario: 'Muy buen servicio' }), { valid: true, error: null }, 'validateFeedback accepts a comment alone');
+  assertEqual(AR.validateFeedback({ rating: 6, comentario: '' }), { valid: false, error: 'Agrega una calificación o un comentario antes de enviar.' }, 'validateFeedback rejects an out-of-range rating with no comment');
+
+  // buildFeedbackMessage
+  assertEqual(
+    AR.buildFeedbackMessage({ rating: 5, comentario: '' }),
+    'Hola, quiero dejar una opinión sobre el servicio:\n• Calificación: ★★★★★ (5/5)',
+    'buildFeedbackMessage renders a full 5-star line with no comment line'
+  );
+  assertEqual(
+    AR.buildFeedbackMessage({ rating: 3, comentario: '' }),
+    'Hola, quiero dejar una opinión sobre el servicio:\n• Calificación: ★★★☆☆ (3/5)',
+    'buildFeedbackMessage renders partial stars correctly'
+  );
+  assertEqual(
+    AR.buildFeedbackMessage({ rating: 0, comentario: '  Excelente atención  ' }),
+    'Hola, quiero dejar una opinión sobre el servicio:\n• Comentario: Excelente atención',
+    'buildFeedbackMessage trims comment and omits rating line when there is none'
+  );
+  assertEqual(
+    AR.buildFeedbackMessage({ rating: 4, comentario: 'Todo bien' }),
+    'Hola, quiero dejar una opinión sobre el servicio:\n• Calificación: ★★★★☆ (4/5)\n• Comentario: Todo bien',
+    'buildFeedbackMessage includes both rating and comment lines when both are present'
+  );
+
+  const summary = document.getElementById('summary');
+  summary.className = fail === 0 ? 'pass' : 'fail';
+  summary.textContent = `${pass} passed, ${fail} failed`;
+  document.title = (fail === 0 ? 'PASS' : 'FAIL') + ' - logic.js tests';
+})();
+</script>
+</body>
+</html>
