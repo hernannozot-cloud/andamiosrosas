@@ -38,7 +38,11 @@
       "Bash(git config *)",
       "Bash(npm --version)",
       "PowerShell(node --version)",
-      "PowerShell(npm --version)"
+      "PowerShell(npm --version)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(where gh *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
