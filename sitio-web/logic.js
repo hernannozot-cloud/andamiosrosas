@@ -2,11 +2,18 @@
 // Exposed on a single global namespace (AR) so it can be loaded standalone
 // by tests without needing the rest of the page.
 (function (global) {
-  const PRECIO_POR_DIA = 110;
+  const PRECIO_POR_DIA = 110; // tarifa por andamio/día a partir de 5 días
+  const TARIFAS_ANDAMIO_CORTAS = { 1: 200, 2: 180, 3: 150, 4: 130 };
   const TOLUCA_LAT = 19.2926;
   const TOLUCA_LON = -99.6568;
-  const RADIO_ENTREGA_GRATIS_KM = 30;
+  const RADIO_ENTREGA_GRATIS_KM = 20;
   const FEEDBACK_MAX_RATING = 5;
+
+  // Precio por andamio/día según la duración total de la renta:
+  // 1-4 días tienen tarifa escalonada más alta; 5+ días usan PRECIO_POR_DIA.
+  function precioAndamioPorDia(dias) {
+    return TARIFAS_ANDAMIO_CORTAS[dias] || PRECIO_POR_DIA;
+  }
 
   function distanciaKm(lat1, lon1, lat2, lon2) {
     const R = 6371;
@@ -46,10 +53,12 @@
 
   global.AR = {
     PRECIO_POR_DIA,
+    TARIFAS_ANDAMIO_CORTAS,
     TOLUCA_LAT,
     TOLUCA_LON,
     RADIO_ENTREGA_GRATIS_KM,
     FEEDBACK_MAX_RATING,
+    precioAndamioPorDia,
     distanciaKm,
     formatoMXN,
     validateFeedback,

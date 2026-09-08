@@ -1,5 +1,40 @@
-const WHATSAPP_NUMBER = '525510698958';
-const { PRECIO_POR_DIA, TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, distanciaKm, formatoMXN } = AR;
+const WHATSAPP_NUMBER = '525539481162';
+const DIAS_MINIMOS = 1;
+const { TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, precioAndamioPorDia, distanciaKm, formatoMXN } = AR;
+
+// Zonas mas alejadas: por costo/logistica de entrega se maneja un minimo de
+// dias de renta mas alto que el general (DIAS_MINIMOS).
+const ZONAS_MINIMO_EXTENDIDO = [
+  { nombre: 'Valle de Bravo', dias: 7 },
+  { nombre: 'Ixtapan de la Sal', dias: 7 },
+];
+
+function normalizarTexto(texto) {
+  return (texto || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+// Si el texto de la zona coincide con una zona de minimo extendido, regresa
+// esos dias minimos; si no, regresa el minimo general del sitio.
+function getDiasMinimos(zonaTexto) {
+  const zonaNormalizada = normalizarTexto(zonaTexto);
+  const especial = ZONAS_MINIMO_EXTENDIDO.find(z => zonaNormalizada.includes(normalizarTexto(z.nombre)));
+  return especial ? especial.dias : DIAS_MINIMOS;
+}
+
+// Dentro de la app nativa (Capacitor) los enlaces externos deben abrirse con el
+// plugin Browser para que el handoff a WhatsApp funcione; en el sitio web normal
+// se sigue usando window.open tal cual.
+function abrirEnlaceExterno(url) {
+  const capacitor = window.Capacitor;
+  if (capacitor && capacitor.isNativePlatform && capacitor.isNativePlatform()) {
+    capacitor.Plugins.Browser.open({ url });
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+}
 
 document.getElementById('year').textContent = new Date().getFullYear();
 
@@ -20,7 +55,9 @@ const quoteTotalBox = document.getElementById('quoteTotal');
 const quoteTotalAmount = document.getElementById('quoteTotalAmount');
 const quoteTotalDetail = document.getElementById('quoteTotalDetail');
 const quoteTotalDelivery = document.getElementById('quoteTotalDelivery');
-const qtyInputs = [...document.querySelectorAll('.qty-input')];
+const quoteTotalAccesorios = document.getElementById('quoteTotalAccesorios');
+const qtyInputs = [...document.querySelectorAll('.andamio-qty')];
+const accesorioInputs = [...document.querySelectorAll('.accesorio-qty')];
 let zonaCoords = null;
 
 function showToast(msg) {
@@ -35,18 +72,15 @@ function getSeleccion() {
     .filter(item => item.cantidad > 0);
 }
 
-// Catalog "Solicitar cotización" buttons scroll to form and bump that type's quantity
-document.querySelectorAll('.card-link').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const tipo = btn.dataset.tipo;
-    const input = qtyInputs.find(i => i.dataset.tipo === tipo);
-    if (input && parseInt(input.value, 10) < 1) {
-      input.value = 1;
-      calcularTotal();
-    }
-    document.getElementById('cotizar').scrollIntoView({ behavior: 'smooth' });
-  });
-});
+function getSeleccionAccesorios() {
+  return accesorioInputs
+    .map(input => ({
+      tipo: input.dataset.tipo,
+      cantidad: parseInt(input.value, 10) || 0,
+      precio: parseFloat(input.dataset.precio),
+    }))
+    .filter(item => item.cantidad > 0);
+}
 
 // Quantity steppers
 document.querySelectorAll('.qty-btn').forEach(btn => {
@@ -65,15 +99,30 @@ function calcularTotal() {
   const totalCantidad = seleccion.reduce((sum, item) => sum + item.cantidad, 0);
   const dias = parseInt(form.dias.value, 10);
   const zona = zonaInput.value.trim();
+  const diasMinimos = getDiasMinimos(zona);
+  form.dias.min = diasMinimos;
 
-  if (!totalCantidad || !dias || dias < 1 || !zona) {
+  if (!totalCantidad || !dias || dias < diasMinimos || !zona) {
     quoteTotalBox.hidden = true;
     return null;
   }
 
-  const total = PRECIO_POR_DIA * totalCantidad * dias;
+  const accesorios = getSeleccionAccesorios();
+  const precioAndamio = precioAndamioPorDia(dias);
+  const totalAndamios = precioAndamio * totalCantidad * dias;
+  const totalAccesorios = accesorios.reduce((sum, a) => sum + a.precio * a.cantidad * dias, 0);
+  const total = totalAndamios + totalAccesorios;
+
   quoteTotalAmount.textContent = formatoMXN(total);
-  quoteTotalDetail.textContent = `${formatoMXN(PRECIO_POR_DIA)}/día × ${totalCantidad} andamio${totalCantidad > 1 ? 's' : ''} × ${dias} día${dias > 1 ? 's' : ''}`;
+  quoteTotalDetail.textContent = `${formatoMXN(precioAndamio)}/día × ${totalCantidad} andamio${totalCantidad > 1 ? 's' : ''} × ${dias} día${dias > 1 ? 's' : ''}`;
+
+  if (accesorios.length) {
+    const partes = accesorios.map(a => `${a.tipo}: ${formatoMXN(a.precio)}/día × ${a.cantidad}`);
+    quoteTotalAccesorios.textContent = `+ ${partes.join(' · ')}`;
+    quoteTotalAccesorios.hidden = false;
+  } else {
+    quoteTotalAccesorios.hidden = true;
+  }
 
   let dentroDeZona = false;
   if (zonaCoords) {
@@ -82,8 +131,11 @@ function calcularTotal() {
   }
 
   if (dentroDeZona) {
-    quoteTotalDelivery.textContent = '¡Entrega gratis!';
+    quoteTotalDelivery.textContent = '¡Entrega y Recolección gratis!';
     quoteTotalDelivery.classList.add('is-free');
+  } else if (diasMinimos > DIAS_MINIMOS) {
+    quoteTotalDelivery.textContent = `Por la distancia, en esta zona la renta mínima es de ${diasMinimos} días. Te contactaremos para darte el precio del transporte.`;
+    quoteTotalDelivery.classList.remove('is-free');
   } else {
     quoteTotalDelivery.textContent = 'Te contactaremos de inmediato para darte el precio del servicio de transporte.';
     quoteTotalDelivery.classList.remove('is-free');
@@ -119,6 +171,14 @@ function renderZonaSuggestions(results) {
       zonaInput.value = place.display_name;
       zonaCoords = { lat: parseFloat(place.lat), lon: parseFloat(place.lon) };
       hideZonaSuggestions();
+
+      const diasMinimosZona = getDiasMinimos(place.display_name);
+      const diasActuales = parseInt(form.dias.value, 10) || 0;
+      if (diasMinimosZona > DIAS_MINIMOS && diasActuales < diasMinimosZona) {
+        form.dias.value = diasMinimosZona;
+        showToast(`Por la distancia de entrega, la renta mínima para esta zona es de ${diasMinimosZona} días. Ajustamos los días de tu cotización.`);
+      }
+
       calcularTotal();
     });
     zonaSuggestions.appendChild(li);
@@ -176,14 +236,26 @@ form.addEventListener('submit', (e) => {
     return;
   }
 
+  const diasMinimos = getDiasMinimos(zona);
+  if (!dias || parseInt(dias, 10) < diasMinimos) {
+    showToast(
+      diasMinimos > DIAS_MINIMOS
+        ? `Para esta zona la renta mínima es de ${diasMinimos} días. Ajusta los días para continuar.`
+        : 'Indica cuántos días necesitas la renta.'
+    );
+    return;
+  }
+
   const total = calcularTotal();
+  const accesorios = getSeleccionAccesorios();
 
   const lines = ['Hola, quiero cotizar una renta de andamios:'];
   seleccion.forEach(item => lines.push(`• ${item.tipo}: ${item.cantidad}`));
+  accesorios.forEach(item => lines.push(`• ${item.tipo}: ${item.cantidad}`));
   if (dias) lines.push(`• Días de renta: ${dias}`);
   if (zona) lines.push(`• Dirección: ${zona}`);
   if (total) {
-    lines.push(`• Total estimado: ${formatoMXN(total)} (${formatoMXN(PRECIO_POR_DIA)}/día)`);
+    lines.push(`• Total estimado: ${formatoMXN(total)}`);
     lines.push(`• ${quoteTotalDelivery.textContent}`);
   }
   lines.push(`• Nombre: ${nombre}`);
@@ -192,7 +264,47 @@ form.addEventListener('submit', (e) => {
 
   const message = encodeURIComponent(lines.join('\n'));
   const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${message}`;
-  window.open(url, '_blank', 'noopener');
+
+  // Google Ads: conversion "Solicitar cotizacion"
+  if (typeof gtag === 'function') {
+    gtag('event', 'conversion', {
+      'send_to': 'AW-18382347257/fW7PCKnJ6e0cEPm3sb1E',
+      'value': 1.0,
+      'currency': 'MXN',
+    });
+  }
+
+  abrirEnlaceExterno(url);
+});
+
+// Product photo lightbox
+const lightboxOverlay = document.getElementById('lightboxOverlay');
+const lightboxImg = document.getElementById('lightboxImg');
+const lightboxClose = document.getElementById('lightboxClose');
+
+function openLightbox(src, alt) {
+  lightboxImg.src = src;
+  lightboxImg.alt = alt || '';
+  lightboxOverlay.hidden = false;
+  document.body.classList.add('modal-open');
+}
+
+function closeLightbox() {
+  lightboxOverlay.hidden = true;
+  document.body.classList.remove('modal-open');
+  lightboxImg.src = '';
+}
+
+document.querySelectorAll('.card-photo, .andamio-pick-card img').forEach(img => {
+  img.addEventListener('click', () => openLightbox(img.getAttribute('src'), img.getAttribute('alt')));
+});
+
+lightboxClose.addEventListener('click', closeLightbox);
+lightboxOverlay.addEventListener('click', (e) => {
+  if (e.target === lightboxOverlay) closeLightbox();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !lightboxOverlay.hidden) closeLightbox();
 });
 
 // Feedback modal
@@ -257,6 +369,6 @@ feedbackForm.addEventListener('submit', (e) => {
 
   const message = encodeURIComponent(AR.buildFeedbackMessage({ rating: feedbackRating, comentario }));
   const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${message}`;
-  window.open(url, '_blank', 'noopener');
+  abrirEnlaceExterno(url);
   closeFeedbackModal();
 });
