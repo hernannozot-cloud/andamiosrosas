@@ -79,6 +79,28 @@
     'buildFeedbackMessage includes both rating and comment lines when both are present'
   );
 
+  // precioAndamioPorDia (tabla cantidad x días)
+  assertEqual(AR.precioAndamioPorDia(1, 1), 200, 'precioAndamioPorDia: 1 andamio 1 día = $200');
+  assertEqual(AR.precioAndamioPorDia(5, 1), 110, 'precioAndamioPorDia: 1 andamio 5 días = $110');
+  assertEqual(AR.precioAndamioPorDia(30, 1), 60, 'precioAndamioPorDia: 1 andamio 30 días = $60');
+  assertEqual(AR.precioAndamioPorDia(5, 10), 75, 'precioAndamioPorDia: 10 andamios 5 días = $75');
+  assertEqual(AR.precioAndamioPorDia(30, 12), 45, 'precioAndamioPorDia: 12 andamios 30 días = $45');
+  assertEqual(AR.precioAndamioPorDia(45, 20), AR.precioAndamioPorDia(30, 12), 'precioAndamioPorDia: más de 12 andamios / 30 días usa el último renglón y columna');
+  assertEqual(AR.precioAndamioPorDia(0, 0), 200, 'precioAndamioPorDia: valores menores a 1 se toman como 1');
+  assertEqual(AR.TARIFAS_ANDAMIO.length, 12, 'TARIFAS_ANDAMIO tiene 12 renglones (andamios)');
+  assertTrue(AR.TARIFAS_ANDAMIO.every(fila => fila.length === 30), 'TARIFAS_ANDAMIO tiene 30 columnas (días) en cada renglón');
+  const noSube = AR.TARIFAS_ANDAMIO.every((fila, i) =>
+    fila.every((p, j) => (j === 0 || p <= fila[j - 1]) && (i === 0 || p <= AR.TARIFAS_ANDAMIO[i - 1][j])));
+  assertTrue(noSube, 'TARIFAS_ANDAMIO nunca sube al aumentar días ni cantidad de andamios');
+
+  // normalizarTelefonoE164
+  assertEqual(AR.normalizarTelefonoE164('722 000 0000'), '+527220000000', 'normalizarTelefonoE164 formats a 10-digit local number to E.164');
+  assertEqual(AR.normalizarTelefonoE164('(722) 000-0000'), '+527220000000', 'normalizarTelefonoE164 strips punctuation from a local number');
+  assertEqual(AR.normalizarTelefonoE164('+52 722 000 0000'), '+527220000000', 'normalizarTelefonoE164 keeps a number that already has the country code');
+  assertEqual(AR.normalizarTelefonoE164('52 1 722 000 0000'), '+5217220000000', 'normalizarTelefonoE164 keeps the legacy 521 mobile prefix');
+  assertEqual(AR.normalizarTelefonoE164('12345'), null, 'normalizarTelefonoE164 returns null for an incomplete number');
+  assertEqual(AR.normalizarTelefonoE164(''), null, 'normalizarTelefonoE164 returns null for an empty value');
+
   const summary = document.getElementById('summary');
   summary.className = fail === 0 ? 'pass' : 'fail';
   summary.textContent = `${pass} passed, ${fail} failed`;

@@ -74,7 +74,7 @@ Logic is split across two files, both loaded as plain `<script>` tags (no module
 matters: `logic.js` must load before `script.js`.
 
 - **`logic.js`**: pure, DOM-free functions and config constants, attached to a single global
-  namespace `window.AR`: `PRECIO_POR_DIA` (price per scaffold per day, MXN), `TOLUCA_LAT`/
+  namespace `window.AR`: `TARIFAS_ANDAMIO` (12×30 price-per-scaffold-per-day table, MXN: rows = scaffold count, columns = days) with `precioAndamioPorDia(dias, cantidad)`, `TOLUCA_LAT`/
   `TOLUCA_LON`/`RADIO_ENTREGA_GRATIS_KM` (free-delivery radius), `distanciaKm()` (haversine),
   `formatoMXN()`, and the feedback helpers `validateFeedback()`/`buildFeedbackMessage()`. This file
   exists specifically so `tests/*.html` can load it standalone without a full DOM. If you add new
@@ -82,7 +82,7 @@ matters: `logic.js` must load before `script.js`.
 - **`script.js`**: all DOM/event wiring, destructures what it needs off `AR` at the top. Key pieces:
   - **Quote flow**: the "Cotizar" section has a quantity stepper per scaffold type (`.qty-input`,
     keyed by `data-tipo`), a days input, and an address field. `calcularTotal()` recomputes the
-    total live (`PRECIO_POR_DIA × total scaffolds × días`) and decides free-delivery messaging via
+    total live (`precioAndamioPorDia(días, total scaffolds) × total scaffolds × días`) and decides free-delivery messaging via
     `AR.distanciaKm()`.
   - **Address autocomplete**: debounced (450ms) calls to the public OpenStreetMap Nominatim API
     (`nominatim.openstreetmap.org/search`, no API key) biased toward the Toluca/CDMX viewbox,

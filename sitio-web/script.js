@@ -1,6 +1,6 @@
 const WHATSAPP_NUMBER = '525539481162';
 const DIAS_MINIMOS = 1;
-const { TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, precioAndamioPorDia, distanciaKm, formatoMXN } = AR;
+const { TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, precioAndamioPorDia, distanciaKm, formatoMXN, normalizarTelefonoE164 } = AR;
 
 // Zonas mas alejadas: por costo/logistica de entrega se maneja un minimo de
 // dias de renta mas alto que el general (DIAS_MINIMOS).
@@ -108,7 +108,7 @@ function calcularTotal() {
   }
 
   const accesorios = getSeleccionAccesorios();
-  const precioAndamio = precioAndamioPorDia(dias);
+  const precioAndamio = precioAndamioPorDia(dias, totalCantidad);
   const totalAndamios = precioAndamio * totalCantidad * dias;
   const totalAccesorios = accesorios.reduce((sum, a) => sum + a.precio * a.cantidad * dias, 0);
   const total = totalAndamios + totalAccesorios;
@@ -267,6 +267,21 @@ form.addEventListener('submit', (e) => {
 
   // Google Ads: conversion "Solicitar cotizacion"
   if (typeof gtag === 'function') {
+    // Conversiones mejoradas: le damos a Google Ads el teléfono y el nombre
+    // que la persona ya capturó en el formulario para que pueda hacer match
+    // con más precisión (Google hashea estos datos antes de enviarlos).
+    const telefonoE164 = normalizarTelefonoE164(telefono);
+    const [primerNombre, ...restoNombre] = nombre.split(/\s+/);
+    const userData = {};
+    if (telefonoE164) userData.phone_number = telefonoE164;
+    if (primerNombre) {
+      userData.address = {
+        first_name: primerNombre,
+        last_name: restoNombre.join(' ') || undefined,
+      };
+    }
+    if (Object.keys(userData).length) gtag('set', 'user_data', userData);
+
     gtag('event', 'conversion', {
       'send_to': 'AW-18382347257/fW7PCKnJ6e0cEPm3sb1E',
       'value': 1.0,
