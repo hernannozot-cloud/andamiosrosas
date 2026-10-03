@@ -131,7 +131,7 @@ function calcularTotal() {
   }
 
   if (dentroDeZona) {
-    quoteTotalDelivery.textContent = '¡Entrega y Recolección gratis!';
+    quoteTotalDelivery.textContent = '¡Traslado, Armado, Desmontaje y Recolección GRATIS!';
     quoteTotalDelivery.classList.add('is-free');
   } else if (diasMinimos > DIAS_MINIMOS) {
     quoteTotalDelivery.textContent = `Por la distancia, en esta zona la renta mínima es de ${diasMinimos} días. Te contactaremos para darte el precio del transporte.`;
