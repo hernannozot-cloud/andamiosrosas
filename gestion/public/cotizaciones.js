@@ -67,7 +67,8 @@ async function abrirCotizacion(id) {
       <div><label>Estatus</label><select name="estado"><option value="apartada">Apartar para esa fecha</option><option value="activa">Entrega inmediata (en obra)</option></select></div>
       <div style="grid-column:1/-1"><button class="btn primary" type="submit">Convertir en renta</button></div></form>
     <p class="error" id="convErr"></p>`}
-    <div class="actions">${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
+    <div class="actions"><a class="btn primary" href="/api/cotizaciones/${c.id}/pdf" target="_blank" rel="noopener">Ver / descargar PDF</a>
+      ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
       ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>`);
   const est = $('#estCot', dlg);
   if (est) est.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { estatus: est.value }); toast('Estatus actualizado'); abrirCotizacion(id); refrescar(); });

@@ -6,7 +6,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { DatabaseSync } = require('node:sqlite');
+const { htmlCotizacion, generarPdf } = require('./cotizacion-pdf');
 
 require(path.join(__dirname, '..', 'sitio-web', 'logic.js')); // define globalThis.AR (tarifario)
 const AR = globalThis.AR;
@@ -519,6 +522,21 @@ route('DELETE', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   run('DELETE FROM cotizaciones WHERE id = ?', id);
   return { ok: true };
 });
+route('GET', /^\/api\/cotizaciones\/(\d+)\/pdf$/, async (ctx, id) => {
+  const c = cotizacionPorId(id);
+  const html = htmlCotizacion(c);
+  const nombre = `${c.folio} ${c.nombre} ANDAMIOS ROSAS`.replace(/[^\p{L}\p{N} ._-]/gu, '').trim();
+  const ascii = nombre.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\x20-\x7E]/g, '');
+  const disp = ctx.query.get('descargar') ? 'attachment' : 'inline';
+  try {
+    const pdf = await generarPdf(html);
+    return { raw: pdf, headers: { 'Content-Type': 'application/pdf',
+      'Content-Disposition': `${disp}; filename="${ascii}.pdf"; filename*=UTF-8''${encodeURIComponent(nombre)}.pdf` } };
+  } catch (e) { // sin Edge/Chrome disponible: se entrega la versión imprimible
+    console.error('PDF:', e.message);
+    return { raw: html.replace('</body>', '<script>onload=()=>print()</script></body>'), headers: { 'Content-Type': 'text/html; charset=utf-8' } };
+  }
+});
 route('POST', /^\/api\/cotizaciones\/(\d+)\/convertir$/, (ctx, id) => {
   const c = cotizacionPorId(id);
   if (c.renta_id) throw bad('Esta cotización ya se convirtió en renta');
@@ -572,7 +590,11 @@ const server = http.createServer(async (req, res) => {
         if (!m) continue;
         if (!r.publica && !sesionValida(req)) throw new HttpError(401, 'Sesión requerida');
         if (req.method !== 'GET' && req.method !== 'DELETE') ctx.body = await readBody(req);
-        const out = r.fn(ctx, ...m.slice(1).map(Number).map((n, i) => (isNaN(n) ? m[i + 1] : n)));
+        const out = await r.fn(ctx, ...m.slice(1).map(Number).map((n, i) => (isNaN(n) ? m[i + 1] : n)));
+        if (out && out.raw) { // respuesta binaria/HTML (PDF de cotización)
+          res.writeHead(200, { 'Cache-Control': 'no-store', ...out.headers });
+          return res.end(out.raw);
+        }
         return sendJson(res, 200, out, ctx.setCookie ? { 'Set-Cookie': ctx.setCookie } : {});
       }
       throw new HttpError(404, 'Ruta no encontrada');
