@@ -1,0 +1,4 @@
+respaldos/
+node_modules/
+*.db
+*.db-*

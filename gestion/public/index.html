@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ef1e78">
+<title>Gestión · Andamios Rosas</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="favicon.png">
+<link rel="stylesheet" href="app.css?v=3">
+</head>
+<body>
+
+<section id="login" class="login" hidden>
+  <form id="loginForm" class="login-card">
+    <img class="login-logo" src="logo.jpg" alt="Andamios Rosas — Andamios bien puestos">
+    <p>Sistema de gestión</p>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN de acceso" required>
+    <button class="btn primary" type="submit">Entrar</button>
+    <p id="loginError" class="error"></p>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <header class="top">
+    <img class="brand" src="logo.jpg" alt="Andamios Rosas">
+    <nav id="nav" class="nav">
+      <button data-v="resumen">Resumen</button>
+      <button data-v="cotizaciones">Cotizaciones</button>
+      <button data-v="rentas">Rentas</button>
+      <button data-v="inventario">Inventario</button>
+      <button data-v="clientes">Clientes</button>
+      <button data-v="reportes">Reportes</button>
+    </nav>
+    <button id="logout" class="link" title="Cerrar sesión">Salir</button>
+  </header>
+  <main id="main"></main>
+</div>
+
+<dialog id="dlg"><div id="dlgBody"></div></dialog>
+<div id="toast" class="toast" role="status"></div>
+
+<script src="/logic.js"></script>
+<script src="cotizaciones.js?v=1"></script>
+<script src="app.js?v=3"></script>
+</body>
+</html>
