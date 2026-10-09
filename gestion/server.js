@@ -385,6 +385,8 @@ function reportes(desde, hasta) {
 
 // ---------- Importación única de ventas históricas (desde el Excel) ----------
 // Cada venta del "Reporte de Ventas" se vuelve una renta con su IVA y sus pagos, y se vincula a su cotización.
+const sinAcentos = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().split(/\s+/).filter(p => p.length > 2);
+const nombresParecidos = (a, b) => { const x = sinAcentos(a), y = sinAcentos(b); return x.some(p => y.some(q => p === q || p.startsWith(q) || q.startsWith(p))); };
 function importarVentas(ventas) {
   const t = hoy();
   const orden = [...ventas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
@@ -406,8 +408,9 @@ function importarVentas(ventas) {
       for (const monto of pagos) {
         if (monto > 0) run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota) VALUES (?,?,?,?,?)', rid, v.fecha_inicio, monto, 'pago', p.nota || null);
       }
-      const cot = v.folio_cotizacion && get('SELECT id FROM cotizaciones WHERE folio = ? AND renta_id IS NULL', v.folio_cotizacion);
-      if (cot) {
+      // Solo se liga si el cliente coincide: en el Excel algunos números de cotización de la hoja de ventas están recorridos.
+      const cot = v.folio_cotizacion && get('SELECT id, nombre FROM cotizaciones WHERE folio = ? AND renta_id IS NULL', v.folio_cotizacion);
+      if (cot && nombresParecidos(cot.nombre, v.cliente)) {
         run("UPDATE cotizaciones SET estatus = 'Contratada', renta_id = ?, cliente_id = ?, cerrada_auto = NULL WHERE id = ?",
           rid, get('SELECT cliente_id FROM rentas WHERE id = ?', rid).cliente_id, cot.id);
       }
