@@ -23,6 +23,7 @@ async function vCotizaciones() {
     <div class="toolbar"><h2 style="margin:0">Cotizaciones</h2><span class="spacer"></span><button id="nuevaCot" class="btn primary">+ Nueva cotización</button></div>
     <div class="grid">${stat(cots.length, 'Cotizaciones')}${stat(pend.length, 'Pendientes')}${stat(cont, 'Contratadas', 'ok')}
       ${stat(cont + no ? `${Math.round(cont / (cont + no) * 100)}%` : '—', 'Tasa de cierre')}${stat(mxn(pend.reduce((s, c) => s + c.total, 0)), 'Monto pendiente')}</div>
+    <div id="grafCot" style="margin-top:14px"></div>
     <div class="toolbar" style="margin-top:14px">${Object.entries(filtros).map(([k, n]) => `<button class="chip ${k === filtroCot ? 'on' : ''}" data-f="${k}">${n} (${cuenta(k)})</button>`).join('')}
       <input id="buscarCot" placeholder="Buscar por nombre o folio" value="${esc(busquedaCot)}" style="max-width:260px"></div>
     <div class="card" id="listaCot"></div>`;
@@ -33,6 +34,7 @@ async function vCotizaciones() {
     $$('[data-cot]', $('#listaCot')).forEach(el => el.onclick = () => abrirCotizacion(Number(el.dataset.cot)));
   };
   pintar();
+  pintarGraficoCotizaciones(cots);
   $$('[data-f]').forEach(b => b.onclick = () => { filtroCot = b.dataset.f; refrescar(); });
   $('#buscarCot').oninput = e => { busquedaCot = e.target.value; pintar(); };
   $('#nuevaCot').onclick = () => act(nuevaCotizacion);
