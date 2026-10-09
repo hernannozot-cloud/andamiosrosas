@@ -75,3 +75,54 @@ function pintarGraficoCotizaciones(cots) {
   const sel = $('#grafDias', cont);
   if (sel) sel.onchange = () => { grafDias = Number(sel.value); pintarGraficoCotizaciones(cots); };
 }
+
+// ---------- Ventas por mes (cobrado + por cobrar) ----------
+function pasoBonito(maxV) { // paso "redondo" (1, 2, 5 × 10^k) para ~4 líneas de guía
+  const crudo = maxV / 4, pot = 10 ** Math.floor(Math.log10(crudo)), f = crudo / pot;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * pot;
+}
+const compacto = n => n >= 1000 ? `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, '')}k` : `$${Math.round(n)}`;
+
+function cubetasVentas(datos) {
+  const hoyMes = hoyStr().slice(0, 7);
+  const porMes = new Map(datos.map(d => [d.mes, d]));
+  const fin = [hoyMes, datos.at(-1)?.mes || hoyMes].sort().at(-1);
+  let [y, m] = (datos[0]?.mes || hoyMes).split('-').map(Number);
+  const [yf, mf] = fin.split('-').map(Number), llaves = [];
+  while (y < yf || (y === yf && m <= mf)) { llaves.push(`${y}-${String(m).padStart(2, '0')}`); if (++m > 12) { m = 1; y++; } }
+  return llaves.slice(-24).map(k => porMes.get(k) || { mes: k, rentas: 0, total: 0, sinIva: 0, iva: 0, cobrado: 0, porCobrar: 0 });
+}
+
+function svgGraficoVentas(cubs, W) {
+  const H = 240, L = 44, R = 8, T = 20, B = 34, pw = W - L - R, ph = H - T - B;
+  const maxV = Math.max(1, ...cubs.map(b => b.total));
+  const paso = pasoBonito(maxV), techo = Math.ceil(maxV / paso) * paso;
+  const n = cubs.length, bw = pw / n, barra = Math.min(bw * 0.7, 56), cada = Math.ceil(n / Math.max(4, Math.floor(pw / 46)));
+  const yv = v => T + ph - (v / techo) * ph;
+  let g = '';
+  for (let v = 0; v <= techo + 1e-9; v += paso) g += `<line x1="${L}" x2="${W - R}" y1="${yv(v)}" y2="${yv(v)}" class="gr-grid"/><text x="${L - 6}" y="${yv(v) + 3}" text-anchor="end">${compacto(v)}</text>`;
+  cubs.forEach((b, i) => {
+    const x = L + i * bw + (bw - barra) / 2;
+    const segs = [[b.cobrado, 'gr-c', 0], [b.porCobrar, 'gr-b', b.cobrado]].filter(([v]) => v > 0.005)
+      .map(([v, cls, base]) => `<rect class="${cls}" x="${x.toFixed(1)}" y="${yv(base + v).toFixed(1)}" width="${barra.toFixed(1)}" height="${(v / techo * ph).toFixed(1)}" rx="2"/>`).join('');
+    const valor = b.total > 0 ? `<text x="${(x + barra / 2).toFixed(1)}" y="${yv(b.total) - 4}" text-anchor="middle" class="gr-v">${bw >= 78 ? mxn(b.total) : compacto(b.total)}</text>` : '';
+    const eje = i % cada === 0 || i === n - 1 ? `<text x="${(x + barra / 2).toFixed(1)}" y="${H - 14}" text-anchor="middle">${esc(etiquetaCubeta(b.mes, 'mes'))}</text>` : '';
+    const tip = `${etiquetaCubeta(b.mes, 'mes')}: ${b.rentas} renta${b.rentas === 1 ? '' : 's'} · ventas ${mxn(b.total)} (sin IVA ${mxn(b.sinIva)} + IVA ${mxn(b.iva)}) · cobrado ${mxn(b.cobrado)} · por cobrar ${mxn(b.porCobrar)}`;
+    g += `<g><title>${esc(tip)}</title><rect x="${(L + i * bw).toFixed(1)}" y="${T}" width="${bw.toFixed(1)}" height="${ph}" fill="transparent"/>${segs}${valor}${eje}</g>`;
+  });
+  return `<svg class="grafico" viewBox="0 0 ${W} ${H}" role="img" aria-label="Ventas por mes">${g}</svg>`;
+}
+
+// Pinta la gráfica de ventas por mes dentro del contenedor indicado (Resumen y Reportes).
+async function pintarGraficoVentas(selector) {
+  const cont = $(selector);
+  if (!cont) return;
+  const datos = await api('GET', '/api/ventas-mensuales');
+  if (!datos.length) { cont.innerHTML = '<div class="card"><h3 style="margin:0 0 6px">Ventas por mes</h3><p class="muted">Aún no hay ventas registradas.</p></div>'; return; }
+  const cubs = cubetasVentas(datos);
+  const total = cubs.reduce((s, b) => s + b.total, 0), mejor = cubs.reduce((a, b) => (b.total > a.total ? b : a), cubs[0]);
+  cont.innerHTML = `<div class="card"><div class="toolbar" style="margin-bottom:4px"><h3 style="margin:0">Ventas por mes</h3><span class="spacer"></span><span class="muted">Ventas con IVA, por mes de inicio de la renta</span></div>
+    ${svgGraficoVentas(cubs, Math.max(300, Math.round(cont.clientWidth - 34)))}
+    <div class="leyenda"><span class="gr-c">Cobrado</span><span class="gr-b">Por cobrar</span></div>
+    <p class="muted" style="margin:6px 0 0">${mxn(total)} en ${cubs.length} mes${cubs.length === 1 ? '' : 'es'} · promedio ${mxn(total / cubs.length)} por mes · mejor mes: ${etiquetaCubeta(mejor.mes, 'mes')} (${mxn(mejor.total)})</p></div>`;
+}

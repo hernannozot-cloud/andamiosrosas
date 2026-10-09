@@ -90,3 +90,4 @@ table.detalle tfoot th { border-top: 2px solid var(--dark); color: var(--dark); 
 .leyenda span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; background: currentColor; }
 .leyenda .gr-c { color: var(--ok); } .leyenda .gr-p { color: var(--warn); } .leyenda .gr-n { color: #b3aabf; }
 .leyenda span { fill: initial; }
+.gr-b { fill: var(--bad); } .leyenda .gr-b { color: var(--bad); }

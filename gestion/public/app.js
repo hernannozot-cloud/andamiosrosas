@@ -83,6 +83,7 @@ async function vResumen() {
       ${stat(mxn(d.ventasTotal), 'Ventas totales', 'ok')}${stat(mxn(d.ventasMes), 'Ventas del mes')}
       ${stat(mxn(d.porCobrar), 'Por cobrar', d.porCobrar > 0.5 ? 'bad' : '')}${stat(mxn(d.cobradoMes), 'Cobrado este mes', 'ok')}
     </div>
+    <div id="grafVentas" style="margin-top:14px"></div>
     <div class="cols">
       <div class="card"><h3 style="margin-top:0">Por regresar</h3>${d.porRegresar.map(rowRenta).join('') || '<p class="muted">No hay rentas activas.</p>'}</div>
       <div class="card"><h3 style="margin-top:0">Próximas entregas (apartadas)</h3>${d.proximas.map(rowRenta).join('') || '<p class="muted">Sin apartados.</p>'}
@@ -93,6 +94,7 @@ async function vResumen() {
         <div class="money">${t.disponibles}<span class="muted"> / ${t.total}</span></div></div>`).join('')}</div>
     </div>`;
   enlazarRentas($('#main'));
+  act(() => pintarGraficoVentas('#grafVentas'));
 }
 
 // ---------- Rentas ----------

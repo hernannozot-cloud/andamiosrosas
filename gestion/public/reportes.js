@@ -24,6 +24,7 @@ async function vReportes() {
     <div class="grid">${stat(d.rentas, 'Rentas')}${stat(mxn(d.facturado), 'Ventas totales (con IVA)')}${stat(mxn(d.cobrado), 'Cobrado', 'ok')}
       ${stat(mxn(d.porCobrar), 'Por cobrar', d.porCobrar > 0.5 ? 'bad' : '')}${stat(mxn(d.ticket), 'Ticket promedio')}${stat(d.diasRentados, 'Días rentados')}</div>
     <p class="muted" style="margin-top:8px">Ventas sin IVA ${mxn(d.sinIva)} + IVA ${mxn(d.iva)}</p>
+    <div id="grafVentas" style="margin-top:14px"></div>
     <div class="cols">
       <div class="card"><h3 style="margin-top:0">Estado de pago</h3>
         <div class="pick"><div class="grow"><div class="t">Pagadas</div><div class="s">${ep.pagadas.n} renta${ep.pagadas.n === 1 ? '' : 's'}</div></div><div class="money" style="color:var(--ok)">${mxn(ep.pagadas.importe)}</div></div>
@@ -40,4 +41,5 @@ async function vReportes() {
       : '<p class="muted">No hay rentas en este periodo.</p>'}</div>`;
   $('#periodo').onchange = e => { periodo = e.target.value; refrescar(); };
   enlazarRentas($('#main'));
+  act(() => pintarGraficoVentas('#grafVentas'));
 }

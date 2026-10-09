@@ -602,6 +602,19 @@ route('GET', /^\/api\/reportes$/, (ctx) => {
   return reportes(desde, hasta);
 });
 
+// Ventas agrupadas por mes de inicio de la renta (con IVA); "cobrado" + "porCobrar" = total.
+route('GET', /^\/api\/ventas-mensuales$/, () => {
+  const meses = new Map();
+  for (const r of todasRentas().filter(x => x.estado !== 'cancelada')) {
+    const k = r.fecha_inicio.slice(0, 7);
+    const b = meses.get(k) || { mes: k, rentas: 0, total: 0, sinIva: 0, iva: 0, cobrado: 0, porCobrar: 0 };
+    const pendiente = Math.max(r.saldo, 0);
+    b.rentas++; b.total += r.total; b.sinIva += r.subtotal + r.extra; b.iva += r.iva;
+    b.porCobrar += pendiente; b.cobrado += r.total - pendiente;
+    meses.set(k, b);
+  }
+  return [...meses.values()].sort((a, b) => a.mes.localeCompare(b.mes));
+});
 route('GET', /^\/api\/cotizaciones$/, () => todasCotizaciones());
 route('GET', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => cotizacionPorId(id));
 route('POST', /^\/api\/cotizaciones$/, (ctx) => cotizacionPorId(crearCotizacion(ctx.body)));
