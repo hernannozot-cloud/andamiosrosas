@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS cotizacion_items (
 );
 `);
 // Migración: las rentas pueden llevar IVA (viene de la cotización).
+// Migración: vigencia de cotizaciones pendientes (pasan solas a "No contratada" a los N días).
+const colsCot = db.prepare('PRAGMA table_info(cotizaciones)').all().map(c => c.name);
+if (!colsCot.includes('pendiente_desde')) {
+  db.exec('ALTER TABLE cotizaciones ADD COLUMN pendiente_desde TEXT');
+  db.exec('UPDATE cotizaciones SET pendiente_desde = fecha WHERE pendiente_desde IS NULL');
+}
+if (!colsCot.includes('cerrada_auto')) db.exec('ALTER TABLE cotizaciones ADD COLUMN cerrada_auto TEXT');
 if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct')) {
   db.exec('ALTER TABLE rentas ADD COLUMN iva_pct REAL NOT NULL DEFAULT 0');
 }
@@ -108,9 +115,9 @@ if (get('SELECT COUNT(*) c FROM cotizaciones').c === 0) {
     const rows = JSON.parse(fs.readFileSync(seed, 'utf8'));
     tx(() => rows.forEach(q => {
       const id = Number(run(`INSERT OR IGNORE INTO cotizaciones (folio, fecha, nombre, direccion, dias, fecha_traslado, fecha_recoleccion,
-        subtotal, logistico, iva_pct, estatus, notas, creada) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        subtotal, logistico, iva_pct, estatus, notas, creada, pendiente_desde) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       q.folio, q.fecha, q.nombre, q.direccion || null, q.dias || 1, q.fecha_traslado || null, q.fecha_recoleccion || null,
-      q.subtotal || 0, q.logistico || 0, q.iva_pct ?? 16, q.estatus || 'Pendiente', q.notas || null, new Date().toISOString()).lastInsertRowid);
+      q.subtotal || 0, q.logistico || 0, q.iva_pct ?? 16, q.estatus || 'Pendiente', q.notas || null, new Date().toISOString(), q.fecha).lastInsertRowid);
       if (id && q.tipo && q.cantidad) {
         run('INSERT OR IGNORE INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, q.tipo, q.cantidad, q.precio_dia || 0);
       }
@@ -255,17 +262,29 @@ function crearRenta(b) {
 
 // ---------- Cotizaciones ----------
 const ESTATUS_COT = ['Pendiente', 'Contratada', 'No contratada'];
+// Una cotización Pendiente pasa sola a "No contratada" cuando se cumplen N días naturales
+// desde que quedó pendiente (su fecha, o el día en que se reabrió). Configurable en config.json.
+const DIAS_VIGENCIA_COT = Number(config.diasVigenciaCotizacion) > 0 ? Number(config.diasVigenciaCotizacion) : 15;
+function expirarCotizaciones() {
+  const t = hoy();
+  const r = run("UPDATE cotizaciones SET estatus = 'No contratada', cerrada_auto = ? WHERE estatus = 'Pendiente' AND renta_id IS NULL AND pendiente_desde <= ?",
+    t, addDays(t, -DIAS_VIGENCIA_COT));
+  if (r.changes) console.log(`${r.changes} cotización(es) pasaron a "No contratada" por cumplir ${DIAS_VIGENCIA_COT} días.`);
+  return r.changes;
+}
 function cotizacionCompleta(c) {
   const items = all('SELECT tipo, cantidad, precio_dia FROM cotizacion_items WHERE cotizacion_id = ? ORDER BY tipo', c.id);
   const iva = Math.round((c.subtotal + c.logistico) * c.iva_pct) / 100;
-  return { ...c, items, iva, total: c.subtotal + c.logistico + iva };
+  const vence = c.estatus === 'Pendiente' ? addDays(c.pendiente_desde || c.fecha, DIAS_VIGENCIA_COT) : null;
+  return { ...c, items, iva, total: c.subtotal + c.logistico + iva, vence, restantes: vence ? diffDays(vence, hoy()) : null, dias_vigencia: DIAS_VIGENCIA_COT };
 }
 function cotizacionPorId(id) {
+  expirarCotizaciones();
   const c = get('SELECT * FROM cotizaciones WHERE id = ?', id);
   if (!c) throw new HttpError(404, 'Cotización no encontrada');
   return cotizacionCompleta(c);
 }
-const todasCotizaciones = () => all('SELECT * FROM cotizaciones ORDER BY fecha DESC, id DESC').map(cotizacionCompleta);
+const todasCotizaciones = () => { expirarCotizaciones(); return all('SELECT * FROM cotizaciones ORDER BY fecha DESC, id DESC').map(cotizacionCompleta); };
 const siguienteFolio = () => `COT${String(get('SELECT COALESCE(MAX(CAST(SUBSTR(folio, 4) AS INTEGER)), 0) n FROM cotizaciones').n + 1).padStart(3, '0')}`;
 
 function crearCotizacion(b) {
@@ -304,10 +323,10 @@ function crearCotizacion(b) {
     let clienteId = Number(b.cliente_id) || null;
     if (clienteId && !get('SELECT id FROM clientes WHERE id = ?', clienteId)) throw bad('Cliente no encontrado');
     const id = Number(run(`INSERT INTO cotizaciones (folio, fecha, cliente_id, nombre, telefono, direccion, dias, fecha_traslado, fecha_recoleccion,
-      subtotal, logistico, iva_pct, estatus, notas, creada) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      subtotal, logistico, iva_pct, estatus, notas, creada, pendiente_desde) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     siguienteFolio(), fecha, clienteId, nombre, String(b.telefono || '').trim() || null, b.direccion || null, dias,
     b.fecha_traslado || null, b.fecha_recoleccion || null, subtotal, logistico, ivaPct,
-    ESTATUS_COT.includes(b.estatus) ? b.estatus : 'Pendiente', b.notas || null, new Date().toISOString()).lastInsertRowid);
+    'Pendiente', b.notas || null, new Date().toISOString(), fecha).lastInsertRowid); // toda cotización nueva nace Pendiente
     for (const l of lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     return id;
   });
@@ -335,6 +354,7 @@ function reportes(desde, hasta) {
 }
 
 function resumen() {
+  expirarCotizaciones();
   const rentas = todasRentas().filter(r => r.estado !== 'cancelada');
   const activas = rentas.filter(r => r.estado === 'activa');
   const mes = hoy().slice(0, 7);
@@ -511,8 +531,12 @@ route('PATCH', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   if (!c) throw new HttpError(404, 'Cotización no encontrada');
   const b = ctx.body;
   if (b.estatus !== undefined && !ESTATUS_COT.includes(b.estatus)) throw bad('Estatus inválido');
-  run('UPDATE cotizaciones SET estatus = ?, notas = ?, telefono = ?, direccion = ? WHERE id = ?',
-    b.estatus ?? c.estatus, b.notas ?? c.notas, b.telefono ?? c.telefono, b.direccion ?? c.direccion, id);
+  const estatus = b.estatus ?? c.estatus;
+  // Al reabrir una cotización (volver a Pendiente) empieza de nuevo su vigencia de N días.
+  const reabierta = estatus === 'Pendiente' && c.estatus !== 'Pendiente';
+  run('UPDATE cotizaciones SET estatus = ?, notas = ?, telefono = ?, direccion = ?, pendiente_desde = ?, cerrada_auto = ? WHERE id = ?',
+    estatus, b.notas ?? c.notas, b.telefono ?? c.telefono, b.direccion ?? c.direccion,
+    reabierta ? hoy() : c.pendiente_desde, estatus !== c.estatus ? null : c.cerrada_auto, id);
   return cotizacionPorId(id);
 });
 route('DELETE', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
@@ -550,7 +574,7 @@ route('POST', /^\/api\/cotizaciones\/(\d+)\/convertir$/, (ctx, id) => {
     notas: `Cotización ${c.folio}${c.notas ? ' · ' + c.notas : ''}`,
   });
   const cli = get('SELECT cliente_id FROM rentas WHERE id = ?', rid).cliente_id;
-  run("UPDATE cotizaciones SET estatus = 'Contratada', renta_id = ?, cliente_id = ? WHERE id = ?", rid, cli, id);
+  run("UPDATE cotizaciones SET estatus = 'Contratada', renta_id = ?, cliente_id = ?, cerrada_auto = NULL WHERE id = ?", rid, cli, id);
   return { renta: rentaPorId(rid), cotizacion: cotizacionPorId(id) };
 });
 
@@ -628,6 +652,8 @@ function respaldar() {
 }
 respaldar();
 setInterval(respaldar, 6 * 3600 * 1000).unref();
+expirarCotizaciones();
+setInterval(expirarCotizaciones, 30 * 60 * 1000).unref(); // además se revisa al abrir cotizaciones y el resumen
 
 server.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i.family === 'IPv4' && !i.internal).map(i => i.address);

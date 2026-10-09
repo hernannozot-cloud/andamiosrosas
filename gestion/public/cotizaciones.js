@@ -1,11 +1,16 @@
 'use strict';
 // Apartado de Cotizaciones. Se carga ANTES de app.js; usa sus ayudantes ($, esc, mxn, api, act, abrirDlg…) al ejecutarse.
 const sumaDias = (s, n) => { const d = new Date(`${s}T00:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
-const badgeCot = e => `<span class="badge ${e === 'Contratada' ? 'ok' : e === 'No contratada' ? '' : 'warn'}">${esc(e)}</span>`;
+// Pendiente muestra cuántos días le quedan antes de pasar sola a "No contratada".
+const badgeCot = c => {
+  if (c.estatus !== 'Pendiente') return `<span class="badge ${c.estatus === 'Contratada' ? 'ok' : ''}">${esc(c.estatus)}${c.cerrada_auto ? ' · automático' : ''}</span>`;
+  const n = c.restantes;
+  return `<span class="badge ${n <= 3 ? 'bad' : 'warn'}">Pendiente · vence ${n <= 0 ? 'hoy' : n === 1 ? 'mañana' : `en ${n} d`}</span>`;
+};
 const piezasCot = c => c.items.map(i => `${i.cantidad} ${esc(i.tipo)}`).join(' · ') || 'Sin piezas';
 const rowCot = c => `<div class="row" data-cot="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)} <span class="muted">${esc(c.folio)}</span></div>
   <div class="s">${piezasCot(c)} · ${c.dias} día${c.dias > 1 ? 's' : ''} · ${fechaCorta(c.fecha)}</div></div>
-  <div style="text-align:right">${badgeCot(c.estatus)}<div class="money">${mxn(c.total)}</div></div></div>`;
+  <div style="text-align:right">${badgeCot(c)}<div class="money">${mxn(c.total)}</div></div></div>`;
 
 let filtroCot = 'Pendiente', busquedaCot = '';
 async function vCotizaciones() {
@@ -49,7 +54,9 @@ async function abrirCotizacion(id) {
   const tel = AR.normalizarTelefonoE164(c.telefono || '');
   const wa = tel ? `https://wa.me/${tel.slice(1)}?text=${encodeURIComponent(msgCotizacion(c))}` : null;
   abrirDlg(`${dlgHead(`${esc(c.folio)} · ${esc(c.nombre)}`)}
-    <p>${badgeCot(c.estatus)} <span class="muted">Cotizada el ${fecha(c.fecha)} · ${c.dias} día${c.dias > 1 ? 's' : ''}</span></p>
+    <p>${badgeCot(c)} <span class="muted">Cotizada el ${fecha(c.fecha)} · ${c.dias} día${c.dias > 1 ? 's' : ''}</span></p>
+    ${c.estatus === 'Pendiente' ? `<p class="muted">⏳ Pasa sola a "No contratada" el ${fecha(c.vence)} (${c.dias_vigencia} días naturales).</p>` : ''}
+    ${c.cerrada_auto ? `<p class="muted">🤖 Pasó a "No contratada" automáticamente el ${fecha(c.cerrada_auto)} por cumplir ${c.dias_vigencia} días. Si el cliente regresa, cámbiala a Pendiente y vuelve a contar ${c.dias_vigencia} días.</p>` : ''}
     ${c.telefono ? `<p class="muted">📞 ${esc(c.telefono)}</p>` : ''}${c.direccion ? `<p class="muted">📍 ${esc(c.direccion)}</p>` : ''}
     ${c.fecha_traslado || c.fecha_recoleccion ? `<p class="muted">🚚 Traslado ${c.fecha_traslado ? fecha(c.fecha_traslado) : '—'} · Recolección ${c.fecha_recoleccion ? fecha(c.fecha_recoleccion) : '—'}</p>` : ''}
     <table><tr><th>Pieza</th><th class="r">Cant.</th><th class="r">$/día</th></tr>
@@ -106,7 +113,8 @@ async function nuevaCotizacion() {
         <div><label style="margin:0">Cant.</label><input class="q" type="number" min="0" value="0"></div>
         <div><label style="margin:0">$/día</label><input class="p" type="number" step="0.01" min="0"></div></div>`).join('')}</div>
       <div class="f2"><div><label>Traslado / logística ($)</label><input name="logistico" type="number" step="0.01" min="0" value="0"></div>
-        <div><label>Estatus</label><select name="estatus"><option>Pendiente</option><option>Contratada</option><option>No contratada</option></select></div></div>
+        <div><label>Estatus</label><div class="badge warn" style="margin-top:6px">Pendiente</div>
+          <div class="muted" style="margin-top:4px">Pasa sola a "No contratada" a los 15 días.</div></div></div>
       <label>Notas</label><textarea name="notas" rows="2" placeholder="Incluye llantas, escalera…"></textarea>
       <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="iva" checked style="width:auto"> Agregar IVA (16%)</label>
       <div class="total"><div class="muted">TOTAL DE LA COTIZACIÓN</div><div class="n" id="totalPrev">$0</div><div class="muted" id="totalDet"></div></div>
@@ -152,12 +160,12 @@ async function nuevaCotizacion() {
     const body = {
       cliente_id: val('cliente_id') || null, nombre: val('nombre'), telefono: val('telefono'), fecha: val('fecha'), dias: Number(val('dias')),
       fecha_traslado: val('fecha_traslado') || null, fecha_recoleccion: val('fecha_recoleccion') || null, direccion: val('direccion'),
-      logistico: val('logistico'), estatus: val('estatus'), notas: val('notas'), iva_pct: form.elements.iva.checked ? 16 : 0, items,
+      logistico: val('logistico'), notas: val('notas'), iva_pct: form.elements.iva.checked ? 16 : 0, items,
     };
     try {
       const c = await api('POST', '/api/cotizaciones', body);
       dlg.close(); toast(`Cotización ${c.folio} guardada`);
-      filtroCot = c.estatus; busquedaCot = ''; ir('cotizaciones'); abrirCotizacion(c.id);
+      filtroCot = 'Pendiente'; busquedaCot = ''; ir('cotizaciones'); abrirCotizacion(c.id);
     } catch (err) { $('#cotErr').textContent = err.message; }
   };
 }
