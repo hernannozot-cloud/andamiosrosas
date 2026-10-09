@@ -2,7 +2,10 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const mxn = n => (Number(n) || 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const mxn = n => { // enteros sin centavos; con centavos siempre 2 decimales
+  const x = Number(n) || 0, d = Number.isInteger(x) ? 0 : 2;
+  return x.toLocaleString('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: d, maximumFractionDigits: d });
+};
 const hoyStr = () => new Date().toLocaleDateString('en-CA');
 const fecha = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 const fechaCorta = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : '';
@@ -77,7 +80,8 @@ async function vResumen() {
     <div class="grid">
       ${stat(d.activas, 'Rentas activas')}${stat(d.vencidas, 'Vencidas', d.vencidas ? 'bad' : '')}${stat(d.apartadas, 'Apartadas')}
       ${stat(d.cotizacionesPendientes, 'Cotizaciones pendientes')}
-      ${stat(mxn(d.porCobrar), 'Por cobrar', d.porCobrar ? 'bad' : '')}${stat(mxn(d.cobradoMes), 'Cobrado este mes', 'ok')}
+      ${stat(mxn(d.ventasTotal), 'Ventas totales', 'ok')}${stat(mxn(d.ventasMes), 'Ventas del mes')}
+      ${stat(mxn(d.porCobrar), 'Por cobrar', d.porCobrar > 0.5 ? 'bad' : '')}${stat(mxn(d.cobradoMes), 'Cobrado este mes', 'ok')}
     </div>
     <div class="cols">
       <div class="card"><h3 style="margin-top:0">Por regresar</h3>${d.porRegresar.map(rowRenta).join('') || '<p class="muted">No hay rentas activas.</p>'}</div>
@@ -284,7 +288,7 @@ async function vClientes() {
 }
 
 // ---------- Reportes ----------
-let periodo = 'mes';
+let periodo = 'todo';
 function rango(p) {
   const n = new Date(), y = n.getFullYear(), m = n.getMonth();
   const f = d => d.toLocaleDateString('en-CA');
@@ -293,22 +297,4 @@ function rango(p) {
   if (p === '30') return [f(new Date(n.getTime() - 29 * 86400000)), f(n)];
   if (p === 'anio') return [`${y}-01-01`, `${y}-12-31`];
   return ['2000-01-01', '2100-12-31'];
-}
-async function vReportes() {
-  const [desde, hasta] = rango(periodo);
-  const d = await api('GET', `/api/reportes?desde=${desde}&hasta=${hasta}`);
-  const max = Math.max(1, ...d.masRentado.map(x => x.pz_dia));
-  const seccion = cat => d.masRentado.filter(x => x.categoria === cat).map(x => `<div class="pick"><div class="grow"><div class="t">${esc(x.tipo)}</div>
-    <div class="bar"><i style="width:${Math.round(x.pz_dia / max * 100)}%"></i></div></div>
-    <div style="text-align:right"><div class="money">${x.pz_dia} pz-día</div><div class="s">${mxn(x.ingreso)}</div></div></div>`).join('') || '<p class="muted">Sin movimiento.</p>';
-  $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Reportes</h2><span class="spacer"></span>
-      <select id="periodo" style="width:auto">${[['mes', 'Este mes'], ['mespasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['anio', 'Este año'], ['todo', 'Todo']].map(([k, n]) => `<option value="${k}" ${k === periodo ? 'selected' : ''}>${n}</option>`).join('')}</select>
-      <button class="btn" onclick="window.print()">Imprimir / PDF</button></div>
-    <p class="muted">Rentas que inician entre ${fecha(desde)} y ${fecha(hasta)}</p>
-    <div class="grid">${stat(d.rentas, 'Rentas')}${stat(mxn(d.facturado), 'Facturado')}${stat(mxn(d.cobrado), 'Cobrado en el periodo', 'ok')}${stat(mxn(d.porCobrar), 'Por cobrar', d.porCobrar ? 'bad' : '')}</div>
-    <div class="cols"><div class="card"><h3 style="margin-top:0">Andamios más rentados</h3>${seccion('andamio')}</div>
-      <div class="card"><h3 style="margin-top:0">Accesorios más rentados</h3>${seccion('accesorio')}</div>
-      <div class="card"><h3 style="margin-top:0">Mejores clientes</h3>${d.mejoresClientes.map(c => `<div class="pick"><div class="grow"><div class="t">${esc(c.nombre)}</div>
-        <div class="s">${c.rentas} renta${c.rentas === 1 ? '' : 's'}</div></div><div class="money">${mxn(c.total)}</div></div>`).join('') || '<p class="muted">Sin datos.</p>'}</div></div>`;
-  $('#periodo').onchange = e => { periodo = e.target.value; refrescar(); };
 }

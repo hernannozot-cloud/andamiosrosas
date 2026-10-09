@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS cotizaciones (
   estatus TEXT NOT NULL DEFAULT 'Pendiente', notas TEXT,
   renta_id INTEGER REFERENCES rentas(id), creada TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS importaciones (nombre TEXT PRIMARY KEY, fecha TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cotizacion_items (
   cotizacion_id INTEGER NOT NULL REFERENCES cotizaciones(id) ON DELETE CASCADE,
   tipo TEXT NOT NULL, cantidad INTEGER NOT NULL, precio_dia REAL NOT NULL,
@@ -90,9 +91,22 @@ if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct
 const all = (sql, ...p) => db.prepare(sql).all(...p);
 const get = (sql, ...p) => db.prepare(sql).get(...p);
 const run = (sql, ...p) => db.prepare(sql).run(...p);
+// Transacción reentrante: la primera abre BEGIN; las anidadas usan SAVEPOINT.
+let txProfundidad = 0;
 function tx(fn) {
-  db.exec('BEGIN');
-  try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+  const sp = `sp${txProfundidad}`;
+  db.exec(txProfundidad === 0 ? 'BEGIN' : `SAVEPOINT ${sp}`);
+  txProfundidad++;
+  try {
+    const r = fn();
+    txProfundidad--;
+    db.exec(txProfundidad === 0 ? 'COMMIT' : `RELEASE ${sp}`);
+    return r;
+  } catch (e) {
+    txProfundidad--;
+    db.exec(txProfundidad === 0 ? 'ROLLBACK' : `ROLLBACK TO ${sp}; RELEASE ${sp}`);
+    throw e;
+  }
 }
 
 // Carga inicial del inventario (exportado una sola vez desde el Excel).
@@ -345,12 +359,75 @@ function reportes(desde, hasta) {
     const c = clientes.get(r.cliente_id) || { nombre: r.cliente_nombre, rentas: 0, total: 0, pagado: 0 };
     c.rentas++; c.total += r.total; c.pagado += r.pagado; clientes.set(r.cliente_id, c);
   }
+  const facturado = rentas.reduce((s, r) => s + r.total, 0);
+  const pagadas = rentas.filter(r => r.saldo <= 0.5), conSaldo = rentas.filter(r => r.saldo > 0.5);
+  const orden = [...rentas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio) || a.id - b.id);
   return {
     desde, hasta, rentas: rentas.length,
-    facturado: rentas.reduce((s, r) => s + r.total, 0), cobrado,
+    facturado, cobrado,
+    iva: rentas.reduce((s, r) => s + r.iva, 0), sinIva: rentas.reduce((s, r) => s + r.subtotal + r.extra, 0),
     porCobrar: rentas.reduce((s, r) => s + Math.max(r.saldo, 0), 0),
+    ticket: rentas.length ? facturado / rentas.length : 0,
+    diasRentados: rentas.reduce((s, r) => s + r.dias, 0),
+    primera: orden[0]?.fecha_inicio || null, ultima: orden.at(-1)?.fecha_inicio || null,
+    estadoPago: { pagadas: { n: pagadas.length, importe: pagadas.reduce((s, r) => s + r.total, 0) },
+      pendientes: { n: conSaldo.length, importe: conSaldo.reduce((s, r) => s + r.saldo, 0) } },
+    detalle: orden.map(r => ({
+      id: r.id, folio: r.folio, cliente: r.cliente_nombre, telefono: r.cliente_telefono, estado: r.estado,
+      fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, dias: r.dias,
+      piezas: r.grupos.map(g => `${g.cantidad} ${g.tipo}`).join(' · '),
+      cobrado: r.subtotal + r.extra, iva: r.iva, total: r.total, pagado: r.pagado, saldo: r.saldo,
+      forma_pago: [...new Set(r.pagos.map(p => p.nota).filter(Boolean))].join(', '),
+    })),
     masRentado, mejoresClientes: [...clientes.values()].sort((a, b) => b.total - a.total).slice(0, 10),
   };
+}
+
+// ---------- Importación única de ventas históricas (desde el Excel) ----------
+// Cada venta del "Reporte de Ventas" se vuelve una renta con su IVA y sus pagos, y se vincula a su cotización.
+function importarVentas(ventas) {
+  const t = hoy();
+  const orden = [...ventas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
+  return tx(() => {
+    for (const v of orden) {
+      const rid = crearRenta({
+        cliente_id: get('SELECT id FROM clientes WHERE lower(nombre) = lower(?)', v.cliente)?.id || null,
+        cliente: { nombre: v.cliente, telefono: v.telefono },
+        fecha_inicio: v.fecha_inicio, dias: v.dias, estado: 'apartada',
+        items: [{ tipo: v.tipo, cantidad: v.cantidad, precio_dia: v.cobrado / (v.cantidad * v.dias) }], // el "cobrado" ya incluye accesorios/traslado
+        iva_pct: v.iva > 0 ? 16 : 0,
+        notas: `${v.folio_cotizacion ? `Cotización ${v.folio_cotizacion} · ` : ''}Importada del Excel (reporte de ventas)`,
+      });
+      const fin = addDays(v.fecha_inicio, v.dias);
+      if (fin <= t) run("UPDATE rentas SET estado = 'devuelta', fecha_devolucion = ? WHERE id = ?", fin, rid);
+      else run("UPDATE rentas SET estado = 'activa' WHERE id = ?", rid);
+      const total = rentaPorId(rid).total, p = v.pago || { modo: 'ninguno' };
+      const pagos = p.modo === 'completo' ? [total] : p.modo === 'faltan' ? [Math.round((total - p.valor) * 100) / 100] : p.modo === 'montos' ? p.valor : [];
+      for (const monto of pagos) {
+        if (monto > 0) run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota) VALUES (?,?,?,?,?)', rid, v.fecha_inicio, monto, 'pago', p.nota || null);
+      }
+      const cot = v.folio_cotizacion && get('SELECT id FROM cotizaciones WHERE folio = ? AND renta_id IS NULL', v.folio_cotizacion);
+      if (cot) {
+        run("UPDATE cotizaciones SET estatus = 'Contratada', renta_id = ?, cliente_id = ?, cerrada_auto = NULL WHERE id = ?",
+          rid, get('SELECT cliente_id FROM rentas WHERE id = ?', rid).cliente_id, cot.id);
+      }
+    }
+    return orden.length;
+  });
+}
+function importarVentasIniciales() {
+  if (get("SELECT 1 x FROM importaciones WHERE nombre = 'ventas'")) return;
+  const archivo = path.join(DATA_DIR, 'ventas-iniciales.json');
+  if (!fs.existsSync(archivo)) return;
+  if (get('SELECT COUNT(*) c FROM rentas').c > 0) { console.log('Ventas iniciales NO importadas: ya hay rentas capturadas en el sistema.'); return; }
+  try {
+    const n = tx(() => {
+      const total = importarVentas(JSON.parse(fs.readFileSync(archivo, 'utf8')));
+      run("INSERT INTO importaciones (nombre, fecha) VALUES ('ventas', ?)", hoy());
+      return total;
+    });
+    console.log(`Ventas históricas importadas: ${n} rentas.`);
+  } catch (e) { console.error('No se pudieron importar las ventas (no se guardó nada):', e.message); }
 }
 
 function resumen() {
@@ -364,6 +441,8 @@ function resumen() {
     vencidas: activas.filter(r => r.vencida).length,
     apartadas: rentas.filter(r => r.estado === 'apartada').length,
     cotizacionesPendientes: get("SELECT COUNT(*) c FROM cotizaciones WHERE estatus = 'Pendiente'").c,
+    ventasTotal: rentas.reduce((s, r) => s + r.total, 0),
+    ventasMes: rentas.filter(r => r.fecha_inicio.slice(0, 7) === mes).reduce((s, r) => s + r.total, 0),
     porCobrar: rentas.reduce((s, r) => s + Math.max(r.saldo, 0), 0),
     cobradoMes: get("SELECT COALESCE(SUM(p.monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != 'cancelada' AND substr(p.fecha,1,7) = ?", mes).s,
     porRegresar: activas.sort((a, b) => a.fecha_fin.localeCompare(b.fecha_fin)).slice(0, 12),
@@ -652,6 +731,7 @@ function respaldar() {
 }
 respaldar();
 setInterval(respaldar, 6 * 3600 * 1000).unref();
+importarVentasIniciales();
 expirarCotizaciones();
 setInterval(expirarCotizaciones, 30 * 60 * 1000).unref(); // además se revisa al abrir cotizaciones y el resumen
 

@@ -77,3 +77,9 @@ th { color: var(--muted); font-size: .75rem; text-transform: uppercase; } td.r, 
   .top, .toolbar, .btn, .no-print { display: none !important; }
   body { background: #fff; } main { padding: 0; } .card { border-color: #ccc; break-inside: avoid; }
 }
+.tabla-scroll { overflow-x: auto; padding: 6px 10px; }
+table.detalle { min-width: 760px; }
+table.detalle th, table.detalle td { font-size: .82rem; vertical-align: top; }
+table.detalle tbody tr[data-renta] { cursor: pointer; } table.detalle tbody tr[data-renta]:hover { background: #fdf1f6; }
+table.detalle tfoot th { border-top: 2px solid var(--dark); color: var(--dark); font-size: .9rem; }
+@media print { .tabla-scroll { overflow: visible; } table.detalle { min-width: 0; } }
