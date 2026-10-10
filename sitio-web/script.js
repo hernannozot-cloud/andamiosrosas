@@ -1,5 +1,43 @@
 const WHATSAPP_NUMBER = '525539481162';
 const DIAS_MINIMOS = 1;
+
+// --- Origen del cliente (para saber de dónde llega cada WhatsApp) ---------
+// Se detecta una vez por visita (primer contacto) y se agrega al mensaje de
+// WhatsApp como "(Origen: Google)", etc. Solo lectura de la URL y el referrer.
+function detectarOrigen() {
+  try {
+    const guardado = sessionStorage.getItem('ar_origen');
+    if (guardado) return guardado;
+  } catch (e) {}
+  let origen = 'Sitio web';
+  const q = new URLSearchParams(location.search);
+  const utm = (q.get('utm_source') || '').toLowerCase();
+  const ref = (document.referrer || '').toLowerCase();
+  if (q.get('gclid') || q.get('gbraid') || q.get('wbraid') || utm === 'google') {
+    origen = 'Google Ads';
+  } else if (utm === 'instagram' || /instagram\.com|l\.instagram/.test(ref)) {
+    origen = 'Instagram';
+  } else if (utm === 'facebook' || /facebook\.com|fb\.com|l\.facebook/.test(ref)) {
+    origen = 'Facebook';
+  } else if (utm === 'tiktok' || /tiktok\.com/.test(ref)) {
+    origen = 'TikTok';
+  } else if (/google\./.test(ref)) {
+    origen = 'Google (búsqueda)';
+  }
+  try { sessionStorage.setItem('ar_origen', origen); } catch (e) {}
+  return origen;
+}
+const ORIGEN_CLIENTE = detectarOrigen();
+
+// Los dos botones fijos de WhatsApp del HTML: agregarles el origen al texto.
+document.querySelectorAll('a[href*="wa.me/"]').forEach(a => {
+  try {
+    const u = new URL(a.href);
+    const t = u.searchParams.get('text') || 'Hola, quiero cotizar la renta de un andamio';
+    u.searchParams.set('text', `${t} (Origen: ${ORIGEN_CLIENTE})`);
+    a.href = u.toString();
+  } catch (e) {}
+});
 const { TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, precioAndamioPorDia, distanciaKm, formatoMXN, normalizarTelefonoE164 } = AR;
 
 // Zonas mas alejadas: por costo/logistica de entrega se maneja un minimo de
@@ -262,6 +300,7 @@ form.addEventListener('submit', (e) => {
   lines.push(`• Teléfono: ${telefono}`);
   if (comentarios) lines.push(`• Comentarios: ${comentarios}`);
 
+  lines.push(`• Origen: ${ORIGEN_CLIENTE}`);
   const message = encodeURIComponent(lines.join('\n'));
   const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${message}`;
 

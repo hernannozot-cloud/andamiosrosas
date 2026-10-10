@@ -306,6 +306,9 @@ header {
   background: var(--gray-bg);
 }
 
+/* Fotos reales de trabajos (sección "Para tu casa o negocio"): llenan el recuadro en vez de mostrarse completas */
+.card-photo.uso { object-fit: cover; max-width: none; }
+
 .card h3 { font-size: 1.15rem; margin-bottom: 8px; }
 .card p { color: #5a4f61; font-size: 0.95rem; margin-bottom: 18px; }
 
