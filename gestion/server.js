@@ -208,6 +208,10 @@ function tiposResumen(inicio = hoy(), dias = 1) {
 }
 function fotoDe(tipo) {
   const t = tipo.toLowerCase();
+  // Fotos propias del sistema (gestion/public/fotos): las plataformas de cada andamio no son la charola.
+  const plataforma = !t.includes('plataforma') ? null : t.includes('plegable') ? 'plataforma-plegable.jpg'
+    : t.includes('estandar') || t.includes('estándar') ? 'plataforma-estandar.jpg' : null;
+  if (plataforma && fs.existsSync(path.join(PUBLIC_DIR, 'fotos', plataforma))) return `/fotos/${plataforma}`;
   const f = t.includes('andamio plegable') ? 'plegable.jpg'
     : t.includes('andamio estandar') || t.includes('andamio estándar') ? 'estandar.jpg'
     : t.includes('llanta') ? 'llantas.jpg'
