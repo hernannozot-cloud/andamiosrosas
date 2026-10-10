@@ -125,6 +125,9 @@ async function abrirRenta(id) {
   if (r.saldo > 0) msg += ` Tienes un saldo pendiente de ${mxn(r.saldo)}.`;
   msg += ' ¿Coordinamos? ¡Gracias!';
   const wa = tel ? `https://wa.me/${tel.slice(1)}?text=${encodeURIComponent(msg)}` : null;
+  // Tipos de pieza para la sección "Equipo entregado": andamios primero, luego accesorios.
+  const tiposEq = r.estado === 'cancelada' ? [] : [...(await act(() => api('GET', '/api/tipos')) || [])]
+    .sort((a, b) => (a.categoria === 'andamio' ? 0 : 1) - (b.categoria === 'andamio' ? 0 : 1) || a.tipo.localeCompare(b.tipo));
   abrirDlg(`${dlgHead(`${esc(r.folio)} · ${esc(r.cliente_nombre)}`)}
     <p>${badgeRenta(r)} <span class="muted">${fecha(r.fecha_inicio)} → ${fecha(r.fecha_fin)} (${r.dias} día${r.dias > 1 ? 's' : ''})</span></p>
     ${r.cliente_telefono ? `<p class="muted">📞 ${esc(r.cliente_telefono)}</p>` : ''}${r.direccion ? `<p class="muted">📍 ${esc(r.direccion)}</p>` : ''}
@@ -150,6 +153,16 @@ async function abrirRenta(id) {
       <div><label>Concepto</label><input name="extra_concepto" value="${esc(r.extra_concepto || '')}" placeholder="Traslado, daño, retraso…"></div>
       <div style="grid-column:1/-1"><label>Notas</label><textarea name="notas" rows="2">${esc(r.notas || '')}</textarea></div>
       <div style="grid-column:1/-1"><button class="btn small" type="submit">Guardar</button></div></form>
+    ${tiposEq.length ? `<h3>Equipo entregado</h3>
+      <p class="muted">Marca lo que realmente salió con esta renta y cuántas piezas. Esto define la <b>utilización</b> y el <b>inventario en renta</b>; la cantidad de arriba es solo para el precio.</p>
+      <div id="equipoLista">${tiposEq.map(t => {
+        const c = (r.equipo.find(e => e.tipo === t.tipo) || {}).cantidad || 0;
+        return `<div class="pick" data-tipo="${esc(t.tipo)}"><input type="checkbox" class="chk" ${c ? 'checked' : ''} aria-label="${esc(t.tipo)}">
+          ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
+          <div class="grow"><div class="t">${esc(t.tipo)}</div></div>
+          <div><input class="q" type="number" min="1" max="999" value="${c || ''}" placeholder="0" ${c ? '' : 'disabled'}></div></div>`;
+      }).join('')}</div>
+      <div style="margin-top:8px"><button class="btn small primary" id="guardarEquipo">Guardar equipo entregado</button></div>` : ''}
     <div class="actions">
       ${r.estado === 'apartada' ? '<button class="btn primary" id="entregar">Marcar entregada</button>' : ''}
       ${r.estado === 'activa' ? '<button class="btn primary" id="devolver">Registrar devolución</button>' : ''}
@@ -166,6 +179,21 @@ async function abrirRenta(id) {
   const fPago = $('#fPago', dlg);
   if (fPago) fPago.onsubmit = e => { e.preventDefault(); const f = new FormData(fPago); act(async () => { await api('POST', `/api/rentas/${id}/pagos`, { monto: f.get('monto'), tipo: f.get('tipo') }); reabrir(); }); };
   $('#fExtra', dlg).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); act(async () => { await api('PATCH', `/api/rentas/${id}`, Object.fromEntries(f)); toast('Guardado'); reabrir(); }); };
+  const lista = $('#equipoLista', dlg);
+  if (lista) {
+    $$('.pick', lista).forEach(fila => {
+      const chk = $('.chk', fila), q = $('.q', fila);
+      chk.onchange = () => { // al marcar, propone lo cotizado (o 1); al desmarcar, la cantidad queda en blanco
+        q.disabled = !chk.checked;
+        q.value = chk.checked ? (q.value || (r.grupos.find(g => g.tipo === fila.dataset.tipo) || {}).cantidad || 1) : '';
+      };
+    });
+    $('#guardarEquipo', dlg).onclick = () => act(async () => {
+      const items = $$('.pick', lista).map(fila => ({ tipo: fila.dataset.tipo, cantidad: $('.chk', fila).checked ? parseInt($('.q', fila).value, 10) || 0 : 0 }));
+      await api('PATCH', `/api/rentas/${id}/equipo`, { items });
+      toast('Equipo entregado guardado'); reabrir();
+    });
+  }
 }
 
 async function nuevaRenta() {
@@ -258,8 +286,14 @@ async function vInventario() {
   $$('[data-tipo]', $('#main')).forEach(c => c.onclick = () => act(() => abrirTipo(c.dataset.tipo)));
 }
 async function abrirTipo(tipo) {
-  const activos = await api('GET', `/api/activos?tipo=${encodeURIComponent(tipo)}`);
+  const [activos, enCampo] = await Promise.all([api('GET', `/api/activos?tipo=${encodeURIComponent(tipo)}`), api('GET', `/api/equipo-en-campo?tipo=${encodeURIComponent(tipo)}`)]);
+  const totalCampo = enCampo.reduce((s, x) => s + x.cantidad, 0);
   abrirDlg(`${dlgHead(esc(tipo))}<p class="muted">${activos.length} piezas. Cambia el estado de una pieza si está en mantenimiento o fuera de servicio.</p>
+    <h3 style="margin-top:6px">En campo ahora: ${totalCampo}</h3>
+    ${enCampo.map(x => `<div class="pick"><div class="grow"><div class="t">${esc(x.cliente)} <span class="muted">${esc(x.folio)}</span></div>
+      <div class="s">Regresa el ${fecha(x.fecha_fin)}</div></div><div>${x.vencida ? '<span class="badge bad">Vencida</span> ' : ''}<span class="money">${x.cantidad}</span></div></div>`).join('') || '<p class="muted">Ninguna pieza de este tipo está en renta.</p>'}
+    <p class="muted" style="margin-top:6px">Se calcula con el <b>equipo entregado</b> de cada renta activa.</p>
+    <h3>Piezas</h3>
     ${activos.map(a => `<div class="pick"><div class="grow"><div class="t">${esc(a.codigo)}</div>
       <div class="s">${a.en_renta ? `En renta · ${esc(a.en_renta.nombre)} (${esc(a.en_renta.folio)})` : esc(a.ubicacion || '')}</div></div>
       <select data-act="${a.id}" style="width:150px">${['Disponible', 'Mantenimiento', 'Baja'].map(e => `<option ${a.estado === e ? 'selected' : ''}>${e}</option>`).join('')}</select></div>`).join('')}

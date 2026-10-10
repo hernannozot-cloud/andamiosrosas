@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS cotizaciones (
   renta_id INTEGER REFERENCES rentas(id), creada TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS importaciones (nombre TEXT PRIMARY KEY, fecha TEXT NOT NULL);
+-- Equipo realmente entregado en cada renta (por tipo). Es lo que mide la utilización y el inventario en renta;
+-- las piezas de renta_activos solo sirven para el precio.
+CREATE TABLE IF NOT EXISTS renta_equipo (
+  renta_id INTEGER NOT NULL REFERENCES rentas(id) ON DELETE CASCADE,
+  tipo TEXT NOT NULL, cantidad INTEGER NOT NULL CHECK (cantidad > 0),
+  PRIMARY KEY (renta_id, tipo)
+);
 CREATE TABLE IF NOT EXISTS cotizacion_items (
   cotizacion_id INTEGER NOT NULL REFERENCES cotizaciones(id) ON DELETE CASCADE,
   tipo TEXT NOT NULL, cantidad INTEGER NOT NULL, precio_dia REAL NOT NULL,
@@ -171,16 +178,31 @@ function libres(tipo, inicio, dias, excluirRenta = 0) {
   return all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo)
     .filter(a => !busy.has(a.id));
 }
+// La disponibilidad y lo "en renta" salen del EQUIPO ENTREGADO de cada renta (renta_equipo), por cantidad de cada tipo.
+const operativosTipo = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado = 'Disponible'", tipo).n;
+function usoMaximo(tipo, inicio, dias, excluirRenta = 0) { // máximo de piezas del tipo en uso en un mismo día del periodo
+  const fin = addDays(inicio, dias), t = hoy();
+  const rows = all(`SELECT e.cantidad, r.fecha_inicio, r.dias, r.estado FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
+    WHERE e.tipo = ? AND r.estado IN ('apartada','activa') AND r.id != ?`, tipo, excluirRenta);
+  const periodos = rows.map(r => {
+    let finR = addDays(r.fecha_inicio, r.dias);
+    if (r.estado === 'activa' && finR <= t) finR = addDays(t, 1); // vencida: sigue en obra
+    return { ini: r.fecha_inicio, fin: finR, n: r.cantidad };
+  }).filter(p => p.ini < fin && p.fin > inicio);
+  let max = 0;
+  for (let d = inicio; d < fin; d = addDays(d, 1)) max = Math.max(max, periodos.filter(p => p.ini <= d && d < p.fin).reduce((s, p) => s + p.n, 0));
+  return max;
+}
+const disponiblesTipo = (tipo, inicio, dias, excluirRenta = 0) => Math.max(0, operativosTipo(tipo) - usoMaximo(tipo, inicio, dias, excluirRenta));
 function tiposResumen(inicio = hoy(), dias = 1) {
   const tipos = all(`SELECT tipo, categoria, COUNT(*) total,
       SUM(estado = 'Disponible') operativos, SUM(estado = 'Mantenimiento') mantenimiento, SUM(estado = 'Baja') baja,
       MIN(renta_dia) renta_dia FROM activos GROUP BY tipo, categoria ORDER BY categoria, tipo`);
-  const enRenta = new Map(all(`SELECT a.tipo, COUNT(DISTINCT ra.activo_id) n FROM renta_activos ra
-      JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
-      WHERE r.estado = 'activa' GROUP BY a.tipo`).map(x => [x.tipo, x.n]));
+  const enRenta = new Map(all(`SELECT e.tipo, SUM(e.cantidad) n FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
+      WHERE r.estado = 'activa' GROUP BY e.tipo`).map(x => [x.tipo, x.n]));
   return tipos.map(t => ({
     ...t, rentados: enRenta.get(t.tipo) || 0,
-    disponibles: libres(t.tipo, inicio, dias).length,
+    disponibles: disponiblesTipo(t.tipo, inicio, dias),
     foto: fotoDe(t.tipo),
   }));
 }
@@ -218,6 +240,7 @@ function rentaCompleta(r) {
     ...r, cliente_nombre: r.cliente_nombre, cliente_telefono: r.cliente_telefono,
     fecha_fin: fin, restantes, vencida: r.estado === 'activa' && fin < t,
     grupos: [...grupos.values()], pagos, subtotal, iva, total, pagado, saldo: Math.round((total - pagado) * 100) / 100,
+    equipo: all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ? ORDER BY tipo', r.id),
   };
 }
 const SELECT_RENTA = `SELECT r.*, c.nombre cliente_nombre, c.telefono cliente_telefono
@@ -249,11 +272,14 @@ function crearRenta(b) {
     const tiposInfo = lineas.map(l => {
       const cant = Number(l.cantidad);
       if (!Number.isInteger(cant)) throw bad('Cantidad inválida');
-      const disp = libres(String(l.tipo), b.fecha_inicio, dias);
-      if (disp.length < cant) {
-        throw bad(`Solo hay ${disp.length} de "${l.tipo}" disponibles del ${b.fecha_inicio} al ${addDays(b.fecha_inicio, dias)}`);
-      }
-      return { l, cant, piezas: disp.slice(0, cant) };
+      const tipo = String(l.tipo);
+      const hay = disponiblesTipo(tipo, b.fecha_inicio, dias);
+      if (hay < cant) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${b.fecha_inicio} al ${addDays(b.fecha_inicio, dias)}`);
+      // Las piezas (códigos) solo se asignan como referencia y para el precio: primero las libres en esas fechas.
+      const libresIds = libres(tipo, b.fecha_inicio, dias);
+      const todas = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo);
+      const piezas = [...libresIds, ...todas.filter(a => !libresIds.some(x => x.id === a.id))].slice(0, cant);
+      return { l, cant, piezas };
     });
     const totalAndamios = tiposInfo.filter(t => t.piezas[0].categoria === 'andamio').reduce((s, t) => s + t.cant, 0);
     const ivaPct = Number(b.iva_pct) > 0 ? Number(b.iva_pct) : 0;
@@ -269,6 +295,9 @@ function crearRenta(b) {
         const precio = manual !== null ? manual : esAndamio ? AR.precioAndamioPorDia(dias, totalAndamios) : p.renta_dia;
         run('INSERT INTO renta_activos (renta_id, activo_id, precio_dia) VALUES (?,?,?)', rid, p.id, precio);
       }
+      // El equipo entregado arranca igual a lo cotizado; se ajusta después en la ficha de la renta.
+      run(`INSERT INTO renta_equipo (renta_id, tipo, cantidad) VALUES (?,?,?)
+        ON CONFLICT (renta_id, tipo) DO UPDATE SET cantidad = cantidad + excluded.cantidad`, rid, piezas[0].tipo, piezas.length);
     }
     return rid;
   });
@@ -498,9 +527,15 @@ route('GET', /^\/api\/tipos$/, (ctx) => {
 route('GET', /^\/api\/activos$/, (ctx) => {
   const tipo = ctx.query.get('tipo');
   const rows = tipo ? all('SELECT * FROM activos WHERE tipo = ? ORDER BY codigo', tipo) : all('SELECT * FROM activos ORDER BY tipo, codigo');
-  const enRenta = new Map(all(`SELECT ra.activo_id, r.folio, c.nombre FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id
-    JOIN clientes c ON c.id = r.cliente_id WHERE r.estado = 'activa'`).map(x => [x.activo_id, x]));
-  return rows.map(a => ({ ...a, en_renta: enRenta.get(a.id) || null }));
+  return rows.map(a => ({ ...a, en_renta: null })); // lo "en renta" se mide por cantidad (equipo entregado), no por pieza
+});
+// Rentas activas que tienen en campo piezas de un tipo (según el equipo entregado).
+route('GET', /^\/api\/equipo-en-campo$/, (ctx) => {
+  const t = hoy();
+  return all(`SELECT r.folio, c.nombre cliente, e.cantidad, r.fecha_inicio, r.dias FROM renta_equipo e
+    JOIN rentas r ON r.id = e.renta_id JOIN clientes c ON c.id = r.cliente_id
+    WHERE e.tipo = ? AND r.estado = 'activa' ORDER BY r.fecha_inicio`, String(ctx.query.get('tipo') || ''))
+    .map(x => ({ ...x, fecha_fin: addDays(x.fecha_inicio, x.dias), vencida: addDays(x.fecha_inicio, x.dias) < t }));
 });
 route('POST', /^\/api\/activos$/, (ctx) => {
   const b = ctx.body;
@@ -560,6 +595,31 @@ route('PATCH', /^\/api\/rentas\/(\d+)$/, (ctx, id) => {
   if (!Number.isInteger(dias) || dias < 1 || dias > 365) throw bad('Días inválidos');
   run('UPDATE rentas SET extra = ?, extra_concepto = ?, notas = ?, dias = ?, direccion = ? WHERE id = ?', extra,
     b.extra_concepto ?? r.extra_concepto, b.notas ?? r.notas, dias, b.direccion ?? r.direccion, id);
+  return rentaPorId(id);
+});
+// Equipo entregado (casillas con cantidad por tipo de andamio y accesorio). Cantidad 0 = casilla sin marcar.
+route('PATCH', /^\/api\/rentas\/(\d+)\/equipo$/, (ctx, id) => {
+  const r = get('SELECT * FROM rentas WHERE id = ?', id);
+  if (!r) throw new HttpError(404, 'Renta no encontrada');
+  if (r.estado === 'cancelada') throw bad('La renta está cancelada');
+  const tipos = new Set(all('SELECT DISTINCT tipo FROM activos').map(x => x.tipo));
+  const limpio = new Map();
+  for (const i of Array.isArray(ctx.body.items) ? ctx.body.items : []) {
+    const c = Number(i.cantidad);
+    if (!tipos.has(i.tipo)) throw bad(`Tipo de pieza desconocido: ${i.tipo}`);
+    if (!Number.isInteger(c) || c < 0 || c > 999) throw bad('Cantidad inválida');
+    limpio.set(i.tipo, c);
+  }
+  if (r.estado !== 'devuelta') { // en rentas vigentes no se puede entregar más de lo que hay libre en esas fechas
+    for (const [tipo, c] of limpio) {
+      const hay = disponiblesTipo(tipo, r.fecha_inicio, r.dias, r.id);
+      if (c > hay) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${r.fecha_inicio} al ${addDays(r.fecha_inicio, r.dias)}`);
+    }
+  }
+  tx(() => {
+    run('DELETE FROM renta_equipo WHERE renta_id = ?', id);
+    for (const [tipo, c] of limpio) if (c > 0) run('INSERT INTO renta_equipo (renta_id, tipo, cantidad) VALUES (?,?,?)', id, tipo, c);
+  });
   return rentaPorId(id);
 });
 route('POST', /^\/api\/rentas\/(\d+)\/entregar$/, (ctx, id) => {
@@ -624,9 +684,10 @@ route('GET', /^\/api\/ventas-mensuales$/, () => {
 route('GET', /^\/api\/utilizacion$/, () => {
   const t = hoy();
   const flota = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado != 'Baja'", tipo).n;
-  const filas = all(`SELECT r.id, r.fecha_inicio, r.dias, r.estado, r.fecha_devolucion, a.tipo, COUNT(*) n
-    FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
-    WHERE r.estado IN ('activa','devuelta') AND a.tipo IN ('Andamio Estandar','Andamio Plegable') GROUP BY r.id, a.tipo`);
+  // Se mide con el EQUIPO ENTREGADO (casillas de la ficha de la renta), no con las piezas del precio.
+  const filas = all(`SELECT r.id, r.fecha_inicio, r.dias, r.estado, r.fecha_devolucion, e.tipo, e.cantidad n
+    FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
+    WHERE r.estado IN ('activa','devuelta') AND e.tipo IN ('Andamio Estandar','Andamio Plegable')`);
   const porDia = new Map();
   let desde = t;
   for (const f of filas) {
@@ -772,6 +833,17 @@ function respaldar() {
 }
 respaldar();
 setInterval(respaldar, 6 * 3600 * 1000).unref();
+// Una sola vez: las rentas que ya existían reciben como equipo entregado lo que traían cotizado (por tipo).
+function llenarEquipoInicial() {
+  if (get("SELECT 1 x FROM importaciones WHERE nombre = 'equipo_inicial'")) return;
+  tx(() => {
+    run(`INSERT OR IGNORE INTO renta_equipo (renta_id, tipo, cantidad)
+      SELECT ra.renta_id, a.tipo, COUNT(*) FROM renta_activos ra JOIN activos a ON a.id = ra.activo_id GROUP BY ra.renta_id, a.tipo`);
+    run("INSERT INTO importaciones (nombre, fecha) VALUES ('equipo_inicial', ?)", hoy());
+  });
+  console.log('Equipo entregado inicializado en las rentas existentes.');
+}
+llenarEquipoInicial();
 importarVentasIniciales();
 expirarCotizaciones();
 setInterval(expirarCotizaciones, 30 * 60 * 1000).unref(); // además se revisa al abrir cotizaciones y el resumen

@@ -94,3 +94,4 @@ table.detalle tfoot th { border-top: 2px solid var(--dark); color: var(--dark); 
 .gu-e { fill: #4b3b6b; } .gu-p { fill: var(--pink); } .gu-line { fill: none; stroke: #2563eb; stroke-width: 2; stroke-linejoin: round; } .gu-dot { fill: #fff; stroke: #2563eb; stroke-width: 1.6; }
 .leyenda .gu-e { color: #4b3b6b; } .leyenda .gu-p { color: var(--pink); } .leyenda .gu-l { color: #2563eb; }
 .stat .sub { font-size: .8rem; color: var(--muted); margin-top: 6px; } .stat .sub .t-e { color: #4b3b6b; font-weight: 600; } .stat .sub .t-p { color: var(--pink-dark); font-weight: 600; }
+.chk { width: 20px; height: 20px; flex: none; accent-color: var(--pink); cursor: pointer; }
