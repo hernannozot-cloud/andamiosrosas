@@ -95,3 +95,5 @@ table.detalle tfoot th { border-top: 2px solid var(--dark); color: var(--dark); 
 .leyenda .gu-e { color: #4b3b6b; } .leyenda .gu-p { color: var(--pink); } .leyenda .gu-l { color: #2563eb; }
 .stat .sub { font-size: .8rem; color: var(--muted); margin-top: 6px; } .stat .sub .t-e { color: #4b3b6b; font-weight: 600; } .stat .sub .t-p { color: var(--pink-dark); font-weight: 600; }
 .chk { width: 20px; height: 20px; flex: none; accent-color: var(--pink); cursor: pointer; }
+table.detalle tr.grupo td { background: #f6f3f8; font-weight: 700; color: var(--dark); font-size: .8rem; text-transform: uppercase; letter-spacing: .4px; }
+table.detalle tr.subtotal td { font-weight: 700; border-top: 1px solid var(--line); background: #fcfbfd; }

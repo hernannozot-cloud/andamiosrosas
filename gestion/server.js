@@ -682,6 +682,28 @@ route('GET', /^\/api\/ventas-mensuales$/, () => {
   }
   return [...meses.values()].sort((a, b) => a.mes.localeCompare(b.mes));
 });
+// Valor en activos: valor de compra (sin IVA) de la flota por tipo, lo que está en renta, disponible, en mantenimiento
+// o dado de baja, y cuánto de la inversión llevan recuperado las ventas (sin IVA). El IVA se calcula al 16%.
+route('GET', /^\/api\/valor-activos$/, () => {
+  const enRenta = new Map(all(`SELECT e.tipo, SUM(e.cantidad) n FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
+    WHERE r.estado = 'activa' GROUP BY e.tipo`).map(x => [x.tipo, x.n]));
+  const tipos = all(`SELECT tipo, categoria, COUNT(*) piezas, SUM(valor) valor,
+      SUM(estado = 'Disponible') operativas, SUM(estado = 'Mantenimiento') mantenimiento, SUM(estado = 'Baja') baja,
+      SUM(CASE WHEN estado = 'Mantenimiento' THEN valor ELSE 0 END) valor_mantenimiento,
+      SUM(CASE WHEN estado = 'Baja' THEN valor ELSE 0 END) valor_baja
+    FROM activos GROUP BY tipo, categoria ORDER BY (categoria = 'andamio') DESC, valor DESC`).map(t => {
+    const unitario = t.piezas ? t.valor / t.piezas : 0, rentadas = Math.min(enRenta.get(t.tipo) || 0, t.piezas);
+    return { ...t, unitario, en_renta: rentadas, valor_en_renta: rentadas * unitario };
+  });
+  const suma = k => tipos.reduce((s, t) => s + t[k], 0);
+  const valor = suma('valor');
+  const ventasSinIva = todasRentas().filter(r => r.estado !== 'cancelada').reduce((s, r) => s + r.subtotal + r.extra, 0);
+  return {
+    tipos, valor, valorConIva: valor * 1.16, piezas: suma('piezas'), enRenta: suma('en_renta'), valorEnRenta: suma('valor_en_renta'),
+    valorMantenimiento: suma('valor_mantenimiento'), valorBaja: suma('valor_baja'), piezasMantenimiento: suma('mantenimiento'), piezasBaja: suma('baja'),
+    ventasSinIva, recuperado: valor ? ventasSinIva / valor : 0,
+  };
+});
 // Utilización de la flota: andamios rentados por día (solo Estándar y Plegable; los accesorios no cuentan).
 // Un andamio cuenta como "en uso" desde el día de inicio hasta el día anterior a su fin/devolución; una renta
 // activa y vencida sigue en uso hasta hoy. La serie arranca el día de la primera renta y llega hasta hoy.

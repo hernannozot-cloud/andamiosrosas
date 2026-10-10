@@ -42,7 +42,7 @@ $('#loginForm').addEventListener('submit', async e => {
 $('#logout').onclick = async () => { await api('POST', '/api/logout', {}).catch(() => {}); showLogin(); };
 
 // ---------- Navegación ----------
-const vistas = { resumen: vResumen, cotizaciones: vCotizaciones, rentas: vRentas, inventario: vInventario, clientes: vClientes, reportes: vReportes, utilizacion: vUtilizacion };
+const vistas = { resumen: vResumen, cotizaciones: vCotizaciones, rentas: vRentas, inventario: vInventario, clientes: vClientes, reportes: vReportes, utilizacion: vUtilizacion, activos: vActivos };
 let vista = 'resumen';
 function ir(v) { vista = vistas[v] ? v : 'resumen'; location.hash = vista; $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === vista)); act(() => vistas[vista]()); }
 $$('#nav button').forEach(b => b.onclick = () => ir(b.dataset.v));
