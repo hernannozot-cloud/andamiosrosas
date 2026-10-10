@@ -42,7 +42,7 @@ $('#loginForm').addEventListener('submit', async e => {
 $('#logout').onclick = async () => { await api('POST', '/api/logout', {}).catch(() => {}); showLogin(); };
 
 // ---------- Navegación ----------
-const vistas = { resumen: vResumen, cotizaciones: vCotizaciones, rentas: vRentas, inventario: vInventario, clientes: vClientes, reportes: vReportes };
+const vistas = { resumen: vResumen, cotizaciones: vCotizaciones, rentas: vRentas, inventario: vInventario, clientes: vClientes, reportes: vReportes, utilizacion: vUtilizacion };
 let vista = 'resumen';
 function ir(v) { vista = vistas[v] ? v : 'resumen'; location.hash = vista; $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.v === vista)); act(() => vistas[vista]()); }
 $$('#nav button').forEach(b => b.onclick = () => ir(b.dataset.v));
@@ -300,3 +300,12 @@ function rango(p) {
   if (p === 'anio') return [`${y}-01-01`, `${y}-12-31`];
   return ['2000-01-01', '2100-12-31'];
 }
+
+// Los gráficos se dibujan al ancho de la pantalla: se redibujan al girar el celular o cambiar el tamaño de la ventana.
+let anchoPrevio = window.innerWidth, temporizadorRedibujo;
+window.addEventListener('resize', () => {
+  clearTimeout(temporizadorRedibujo);
+  temporizadorRedibujo = setTimeout(() => {
+    if (Math.abs(window.innerWidth - anchoPrevio) > 30 && ['resumen', 'cotizaciones', 'reportes', 'utilizacion'].includes(vista)) { anchoPrevio = window.innerWidth; refrescar(); }
+  }, 300);
+});

@@ -618,6 +618,31 @@ route('GET', /^\/api\/ventas-mensuales$/, () => {
   }
   return [...meses.values()].sort((a, b) => a.mes.localeCompare(b.mes));
 });
+// Utilización de la flota: andamios rentados por día (solo Estándar y Plegable; los accesorios no cuentan).
+// Un andamio cuenta como "en uso" desde el día de inicio hasta el día anterior a su fin/devolución; una renta
+// activa y vencida sigue en uso hasta hoy. La serie arranca el día de la primera renta y llega hasta hoy.
+route('GET', /^\/api\/utilizacion$/, () => {
+  const t = hoy();
+  const flota = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado != 'Baja'", tipo).n;
+  const filas = all(`SELECT r.id, r.fecha_inicio, r.dias, r.estado, r.fecha_devolucion, a.tipo, COUNT(*) n
+    FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
+    WHERE r.estado IN ('activa','devuelta') AND a.tipo IN ('Andamio Estandar','Andamio Plegable') GROUP BY r.id, a.tipo`);
+  const porDia = new Map();
+  let desde = t;
+  for (const f of filas) {
+    const fin = f.estado === 'devuelta' ? (f.fecha_devolucion || addDays(f.fecha_inicio, f.dias)) : addDays(f.fecha_inicio, f.dias);
+    const ultimo = f.estado === 'activa' && fin <= t ? t : addDays(fin, -1);
+    if (f.fecha_inicio < desde) desde = f.fecha_inicio;
+    for (let d = f.fecha_inicio; d <= ultimo && d <= t; d = addDays(d, 1)) {
+      const reg = porDia.get(d) || { e: 0, p: 0 };
+      if (f.tipo === 'Andamio Estandar') reg.e += f.n; else reg.p += f.n;
+      porDia.set(d, reg);
+    }
+  }
+  const dias = [];
+  for (let d = desde; d <= t; d = addDays(d, 1)) dias.push({ f: d, ...(porDia.get(d) || { e: 0, p: 0 }) });
+  return { flota: { e: flota('Andamio Estandar'), p: flota('Andamio Plegable') }, desde, hasta: t, dias };
+});
 route('GET', /^\/api\/cotizaciones$/, () => todasCotizaciones());
 route('GET', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => cotizacionPorId(id));
 route('POST', /^\/api\/cotizaciones$/, (ctx) => cotizacionPorId(crearCotizacion(ctx.body)));
