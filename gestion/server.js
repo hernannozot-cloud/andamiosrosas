@@ -94,6 +94,17 @@ if (!colsCot.includes('cerrada_auto')) db.exec('ALTER TABLE cotizaciones ADD COL
 if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct')) {
   db.exec('ALTER TABLE rentas ADD COLUMN iva_pct REAL NOT NULL DEFAULT 0');
 }
+// Migración: forma de pago por pago (efectivo / transferencia) y factura por renta.
+if (!db.prepare('PRAGMA table_info(pagos)').all().some(c => c.name === 'forma')) {
+  db.exec('ALTER TABLE pagos ADD COLUMN forma TEXT');
+  // Los pagos importados traían la forma escrita en la nota ("Transferencia", "Efectivo", "Pagado en efectivo").
+  db.exec("UPDATE pagos SET forma = 'transferencia' WHERE lower(COALESCE(nota, '')) LIKE '%transfer%'");
+  db.exec("UPDATE pagos SET forma = 'efectivo' WHERE forma IS NULL AND lower(COALESCE(nota, '')) LIKE '%efectivo%'");
+}
+const colsRentas = db.prepare('PRAGMA table_info(rentas)').all().map(c => c.name);
+if (!colsRentas.includes('facturada')) db.exec('ALTER TABLE rentas ADD COLUMN facturada INTEGER NOT NULL DEFAULT 0');
+if (!colsRentas.includes('factura_folio')) db.exec('ALTER TABLE rentas ADD COLUMN factura_folio TEXT');
+const FORMAS_PAGO = { efectivo: 'Efectivo', transferencia: 'Transferencia' };
 
 const all = (sql, ...p) => db.prepare(sql).all(...p);
 const get = (sql, ...p) => db.prepare(sql).get(...p);
@@ -393,6 +404,11 @@ function reportes(desde, hasta) {
     c.rentas++; c.total += r.total; c.pagado += r.pagado; clientes.set(r.cliente_id, c);
   }
   const facturado = rentas.reduce((s, r) => s + r.total, 0);
+  // Lo cobrado en el periodo por forma de pago (lo que no tiene forma capturada queda en "sin")
+  const porForma = { efectivo: 0, transferencia: 0, sin: 0 };
+  for (const x of all(`SELECT COALESCE(p.forma, 'sin') forma, SUM(p.monto) monto FROM pagos p JOIN rentas r ON r.id = p.renta_id
+    WHERE r.estado != 'cancelada' AND p.fecha BETWEEN ? AND ? GROUP BY 1`, desde, hasta)) porForma[x.forma] = x.monto;
+  const conFactura = rentas.filter(r => r.facturada);
   const pagadas = rentas.filter(r => r.saldo <= 0.5), conSaldo = rentas.filter(r => r.saldo > 0.5);
   const orden = [...rentas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio) || a.id - b.id);
   return {
@@ -405,12 +421,16 @@ function reportes(desde, hasta) {
     primera: orden[0]?.fecha_inicio || null, ultima: orden.at(-1)?.fecha_inicio || null,
     estadoPago: { pagadas: { n: pagadas.length, importe: pagadas.reduce((s, r) => s + r.total, 0) },
       pendientes: { n: conSaldo.length, importe: conSaldo.reduce((s, r) => s + r.saldo, 0) } },
+    porForma,
+    facturas: { n: conFactura.length, importe: conFactura.reduce((s, r) => s + r.total, 0), sinFactura: rentas.length - conFactura.length },
+    conIva: rentas.filter(r => r.iva_pct > 0).length, sinIvaN: rentas.filter(r => !(r.iva_pct > 0)).length,
     detalle: orden.map(r => ({
       id: r.id, folio: r.folio, cliente: r.cliente_nombre, telefono: r.cliente_telefono, estado: r.estado,
       fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, dias: r.dias,
       piezas: r.grupos.map(g => `${g.cantidad} ${g.tipo}`).join(' · '),
       cobrado: r.subtotal + r.extra, iva: r.iva, total: r.total, pagado: r.pagado, saldo: r.saldo,
-      forma_pago: [...new Set(r.pagos.map(p => p.nota).filter(Boolean))].join(', '),
+      forma_pago: [...new Set(r.pagos.map(p => FORMAS_PAGO[p.forma] || p.nota).filter(Boolean))].join(', '),
+      facturada: !!r.facturada, factura_folio: r.factura_folio, con_iva: r.iva_pct > 0,
     })),
     masRentado, mejoresClientes: [...clientes.values()].sort((a, b) => b.total - a.total).slice(0, 10),
   };
@@ -439,7 +459,8 @@ function importarVentas(ventas) {
       const total = rentaPorId(rid).total, p = v.pago || { modo: 'ninguno' };
       const pagos = p.modo === 'completo' ? [total] : p.modo === 'faltan' ? [Math.round((total - p.valor) * 100) / 100] : p.modo === 'montos' ? p.valor : [];
       for (const monto of pagos) {
-        if (monto > 0) run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota) VALUES (?,?,?,?,?)', rid, v.fecha_inicio, monto, 'pago', p.nota || null);
+        const forma = /transfer/i.test(p.nota || '') ? 'transferencia' : /efectivo/i.test(p.nota || '') ? 'efectivo' : null;
+        if (monto > 0) run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota, forma) VALUES (?,?,?,?,?,?)', rid, v.fecha_inicio, monto, 'pago', p.nota || null, forma);
       }
       // Solo se liga si el cliente coincide: en el Excel algunos números de cotización de la hoja de ventas están recorridos.
       const cot = v.folio_cotizacion && get('SELECT id, nombre FROM cotizaciones WHERE folio = ? AND renta_id IS NULL', v.folio_cotizacion);
@@ -597,8 +618,13 @@ route('PATCH', /^\/api\/rentas\/(\d+)$/, (ctx, id) => {
   if (!Number.isFinite(extra)) throw bad('Monto inválido');
   const dias = b.dias !== undefined ? Number(b.dias) : r.dias;
   if (!Number.isInteger(dias) || dias < 1 || dias > 365) throw bad('Días inválidos');
-  run('UPDATE rentas SET extra = ?, extra_concepto = ?, notas = ?, dias = ?, direccion = ? WHERE id = ?', extra,
-    b.extra_concepto ?? r.extra_concepto, b.notas ?? r.notas, dias, b.direccion ?? r.direccion, id);
+  // IVA: el cliente puede decidir pagar en efectivo (sin IVA) o con IVA después de cotizar; se puede cambiar aquí.
+  const iva = b.iva_pct !== undefined ? Number(b.iva_pct) : r.iva_pct;
+  if (!Number.isFinite(iva) || iva < 0 || iva > 100) throw bad('IVA inválido');
+  const facturada = b.facturada !== undefined ? (b.facturada ? 1 : 0) : r.facturada;
+  run('UPDATE rentas SET extra = ?, extra_concepto = ?, notas = ?, dias = ?, direccion = ?, iva_pct = ?, facturada = ?, factura_folio = ? WHERE id = ?', extra,
+    b.extra_concepto ?? r.extra_concepto, b.notas ?? r.notas, dias, b.direccion ?? r.direccion, iva, facturada,
+    b.factura_folio !== undefined ? (String(b.factura_folio).trim() || null) : r.factura_folio, id);
   return rentaPorId(id);
 });
 // Equipo entregado (casillas con cantidad por tipo de andamio y accesorio). Cantidad 0 = casilla sin marcar.
@@ -653,9 +679,19 @@ route('POST', /^\/api\/rentas\/(\d+)\/pagos$/, (ctx, id) => {
   const monto = Number(ctx.body.monto);
   if (!(monto > 0)) throw bad('Monto inválido');
   const fecha = esFecha(ctx.body.fecha) ? ctx.body.fecha : hoy();
-  run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota) VALUES (?,?,?,?,?)', id, fecha, monto,
-    ctx.body.tipo === 'anticipo' ? 'anticipo' : 'pago', ctx.body.nota || null);
+  const forma = ctx.body.forma ? String(ctx.body.forma) : null;
+  if (forma && !FORMAS_PAGO[forma]) throw bad('Forma de pago inválida (efectivo o transferencia)');
+  run('INSERT INTO pagos (renta_id, fecha, monto, tipo, nota, forma) VALUES (?,?,?,?,?,?)', id, fecha, monto,
+    ctx.body.tipo === 'anticipo' ? 'anticipo' : 'pago', ctx.body.nota || null, forma);
   return rentaPorId(id);
+});
+route('PATCH', /^\/api\/pagos\/(\d+)$/, (ctx, id) => { // cambiar la forma de pago de un pago ya registrado
+  const p = get('SELECT renta_id FROM pagos WHERE id = ?', id);
+  if (!p) throw new HttpError(404, 'Pago no encontrado');
+  const forma = ctx.body.forma ? String(ctx.body.forma) : null;
+  if (forma && !FORMAS_PAGO[forma]) throw bad('Forma de pago inválida (efectivo o transferencia)');
+  run('UPDATE pagos SET forma = ? WHERE id = ?', forma, id);
+  return rentaPorId(p.renta_id);
 });
 route('DELETE', /^\/api\/pagos\/(\d+)$/, (ctx, id) => {
   const p = get('SELECT renta_id FROM pagos WHERE id = ?', id);
@@ -741,9 +777,13 @@ route('PATCH', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   const estatus = b.estatus ?? c.estatus;
   // Al reabrir una cotización (volver a Pendiente) empieza de nuevo su vigencia de N días.
   const reabierta = estatus === 'Pendiente' && c.estatus !== 'Pendiente';
-  run('UPDATE cotizaciones SET estatus = ?, notas = ?, telefono = ?, direccion = ?, pendiente_desde = ?, cerrada_auto = ? WHERE id = ?',
+  // IVA: se puede activar o quitar mientras la cotización no se haya convertido en renta (el cliente decide cómo paga).
+  const iva = b.iva_pct !== undefined ? Number(b.iva_pct) : c.iva_pct;
+  if (!Number.isFinite(iva) || iva < 0 || iva > 100) throw bad('IVA inválido');
+  if (iva !== c.iva_pct && c.renta_id) throw bad('Ya se convirtió en renta: cambia el IVA desde la renta');
+  run('UPDATE cotizaciones SET estatus = ?, notas = ?, telefono = ?, direccion = ?, pendiente_desde = ?, cerrada_auto = ?, iva_pct = ? WHERE id = ?',
     estatus, b.notas ?? c.notas, b.telefono ?? c.telefono, b.direccion ?? c.direccion,
-    reabierta ? hoy() : c.pendiente_desde, estatus !== c.estatus ? null : c.cerrada_auto, id);
+    reabierta ? hoy() : c.pendiente_desde, estatus !== c.estatus ? null : c.cerrada_auto, iva, id);
   return cotizacionPorId(id);
 });
 route('DELETE', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {

@@ -14,7 +14,7 @@ async function vReportes() {
     <td>${fechaCorta(r.fecha_inicio)}${r.estado === 'cancelada' ? '' : ` → ${fechaCorta(r.fecha_fin)}`}</td>
     <td>${esc(r.piezas)}</td><td class="r">${r.dias}</td>
     <td class="r">${mxn(r.cobrado)}</td><td class="r">${mxn(r.iva)}</td><td class="r money">${mxn(r.total)}</td>
-    <td>${r.saldo > 0.5 ? `<span class="badge bad">Debe ${mxn(r.saldo)}</span>` : '<span class="badge ok">Pagado</span>'}${r.forma_pago ? `<div class="muted">${esc(r.forma_pago)}</div>` : ''}</td></tr>`;
+    <td>${r.saldo > 0.5 ? `<span class="badge bad">Debe ${mxn(r.saldo)}</span>` : '<span class="badge ok">Pagado</span>'}${r.facturada ? ' <span class="badge info">Factura</span>' : ''}${r.con_iva ? '' : ' <span class="badge">Sin IVA</span>'}${r.forma_pago ? `<div class="muted">${esc(r.forma_pago)}</div>` : ''}</td></tr>`;
   const sum = k => d.detalle.reduce((s, r) => s + r[k], 0);
   const opciones = [['mes', 'Este mes'], ['mespasado', 'Mes pasado'], ['30', 'Últimos 30 días'], ['anio', 'Este año'], ['todo', 'Todo el tiempo']];
   $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Reportes de ventas</h2><span class="spacer"></span>
@@ -26,6 +26,12 @@ async function vReportes() {
     <p class="muted" style="margin-top:8px">Ventas sin IVA ${mxn(d.sinIva)} + IVA ${mxn(d.iva)}</p>
     <div id="grafVentas" style="margin-top:14px"></div>
     <div class="cols">
+      <div class="card"><h3 style="margin-top:0">Forma de pago y facturas</h3>
+        <div class="pick"><div class="grow"><div class="t">Cobrado en efectivo</div></div><div class="money">${mxn(d.porForma.efectivo)}</div></div>
+        <div class="pick"><div class="grow"><div class="t">Cobrado por transferencia</div></div><div class="money">${mxn(d.porForma.transferencia)}</div></div>
+        ${d.porForma.sin > 0.5 ? `<div class="pick"><div class="grow"><div class="t">Sin forma de pago capturada</div><div class="s">ábrelas y elige efectivo o transferencia</div></div><div class="money" style="color:var(--warn)">${mxn(d.porForma.sin)}</div></div>` : ''}
+        <div class="pick"><div class="grow"><div class="t">Rentas con factura</div><div class="s">${d.facturas.n} de ${d.rentas} · ${d.facturas.sinFactura} sin factura</div></div><div class="money">${mxn(d.facturas.importe)}</div></div>
+        <div class="pick"><div class="grow"><div class="t">Rentas con IVA / sin IVA</div></div><div class="money">${d.conIva} / ${d.sinIvaN}</div></div></div>
       <div class="card"><h3 style="margin-top:0">Estado de pago</h3>
         <div class="pick"><div class="grow"><div class="t">Pagadas</div><div class="s">${ep.pagadas.n} renta${ep.pagadas.n === 1 ? '' : 's'}</div></div><div class="money" style="color:var(--ok)">${mxn(ep.pagadas.importe)}</div></div>
         <div class="pick"><div class="grow"><div class="t">Con saldo pendiente</div><div class="s">${ep.pendientes.n} renta${ep.pendientes.n === 1 ? '' : 's'}</div></div><div class="money" style="color:${ep.pendientes.n ? 'var(--bad)' : 'inherit'}">${mxn(ep.pendientes.importe)}</div></div></div>

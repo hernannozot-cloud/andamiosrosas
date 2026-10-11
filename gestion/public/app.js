@@ -66,7 +66,7 @@ function badgeRenta(r) {
 const piezasTxt = r => r.grupos.map(g => `${g.cantidad} ${esc(g.tipo)}`).join(' · ');
 function rowRenta(r) {
   return `<div class="row" data-renta="${r.id}"><div class="grow"><div class="t">${esc(r.cliente_nombre)} <span class="muted">${esc(r.folio)}</span></div>
-    <div class="s">${piezasTxt(r)}</div></div><div style="text-align:right">${badgeRenta(r)}
+    <div class="s">${piezasTxt(r)}</div></div><div style="text-align:right">${badgeRenta(r)}${r.facturada ? ' <span class="badge info">Factura</span>' : ''}
     ${r.saldo > 0 && r.estado !== 'cancelada' ? `<div class="money" style="color:var(--bad);font-size:.85rem">Debe ${mxn(r.saldo)}</div>` : ''}</div></div>`;
 }
 const enlazarRentas = root => $$('[data-renta]', root).forEach(el => el.onclick = () => abrirRenta(Number(el.dataset.renta)));
@@ -136,18 +136,28 @@ async function abrirRenta(id) {
     <table style="margin-top:10px">
       <tr><td>Subtotal (${r.dias} d)</td><td class="r money">${mxn(r.subtotal)}</td></tr>
       <tr><td>Cargo adicional${r.extra_concepto ? ` <span class="muted">(${esc(r.extra_concepto)})</span>` : ''}</td><td class="r money">${mxn(r.extra)}</td></tr>
-      ${r.iva ? `<tr><td>IVA (${r.iva_pct}%)</td><td class="r money">${mxn(r.iva)}</td></tr>` : ''}
+      ${r.estado === 'cancelada' ? (r.iva ? `<tr><td>IVA (${r.iva_pct}%)</td><td class="r money">${mxn(r.iva)}</td></tr>` : '')
+        : `<tr><td><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit;font-weight:400"><input type="checkbox" id="chkIva" class="chk" ${r.iva_pct > 0 ? 'checked' : ''}> Con IVA (16%) <span class="muted">· quítalo si paga en efectivo sin IVA</span></label></td><td class="r money">${mxn(r.iva)}</td></tr>`}
       <tr><td><b>Total</b></td><td class="r money">${mxn(r.total)}</td></tr>
       <tr><td>Pagado</td><td class="r money" style="color:var(--ok)">${mxn(r.pagado)}</td></tr>
       <tr><td><b>Saldo</b></td><td class="r money" style="color:${r.saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${mxn(r.saldo)}</td></tr></table>
     <h3>Pagos</h3>
     ${r.pagos.map(p => `<div class="row" style="cursor:default"><div class="grow"><div class="t">${mxn(p.monto)} <span class="badge">${esc(p.tipo)}</span></div>
-      <div class="s">${fecha(p.fecha)}${p.nota ? ' · ' + esc(p.nota) : ''}</div></div><button class="btn small danger" data-delpago="${p.id}">Quitar</button></div>`).join('') || '<p class="muted">Sin pagos registrados.</p>'}
+      <div class="s">${fecha(p.fecha)}${p.nota ? ' · ' + esc(p.nota) : ''}</div></div>
+      <select data-forma="${p.id}" style="width:auto" title="Forma de pago"><option value="">Forma: sin especificar</option>
+        <option value="efectivo" ${p.forma === 'efectivo' ? 'selected' : ''}>Efectivo</option><option value="transferencia" ${p.forma === 'transferencia' ? 'selected' : ''}>Transferencia</option></select>
+      <button class="btn small danger" data-delpago="${p.id}">Quitar</button></div>`).join('') || '<p class="muted">Sin pagos registrados.</p>'}
     ${r.estado !== 'cancelada' ? `<form id="fPago" class="f2" style="margin-top:8px">
       <div><label>Monto</label><input name="monto" type="number" step="0.01" min="0.01" required></div>
       <div><label>Tipo</label><select name="tipo"><option value="pago">Pago</option><option value="anticipo">Anticipo</option></select></div>
+      <div><label>Forma de pago</label><select name="forma"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option></select></div><div></div>
       <div style="grid-column:1/-1"><button class="btn small primary" type="submit">Registrar pago</button>
         ${r.saldo > 0 ? `<button class="btn small" type="button" id="liquidar">Liquidar saldo (${mxn(r.saldo)})</button>` : ''}</div></form>` : ''}
+    ${r.estado !== 'cancelada' ? `<h3>Factura</h3>
+    <form id="fFactura" class="f2"><div style="grid-column:1/-1"><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit;font-weight:600"><input type="checkbox" name="facturada" class="chk" ${r.facturada ? 'checked' : ''}> Se generó factura a este cliente</label></div>
+      <div><label>Folio de la factura (opcional)</label><input name="factura_folio" value="${esc(r.factura_folio || '')}" placeholder="Ej. A-123"></div>
+      <div style="align-self:end"><button class="btn small" type="submit">Guardar factura</button></div></form>
+    ${r.facturada && !(r.iva_pct > 0) ? '<p class="muted" style="color:var(--warn)">⚠ Marcaste factura, pero esta renta está sin IVA.</p>' : ''}` : ''}
     <h3>Cargo adicional y notas</h3>
     <form id="fExtra" class="f2"><div><label>Monto ($)</label><input name="extra" type="number" step="0.01" value="${r.extra}"></div>
       <div><label>Concepto</label><input name="extra_concepto" value="${esc(r.extra_concepto || '')}" placeholder="Traslado, daño, retraso…"></div>
@@ -174,10 +184,15 @@ async function abrirRenta(id) {
   accion('#entregar', () => api('POST', `/api/rentas/${id}/entregar`, {}));
   accion('#devolver', () => api('POST', `/api/rentas/${id}/devolver`, {}));
   accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres.')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
-  accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación' }));
+  accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación', forma: $('#fPago', dlg).elements.forma.value }));
+  const chkIva = $('#chkIva', dlg);
+  if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/rentas/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); reabrir(); });
+  $$('[data-forma]', dlg).forEach(s => s.onchange = () => act(async () => { await api('PATCH', `/api/pagos/${s.dataset.forma}`, { forma: s.value }); toast('Forma de pago actualizada'); reabrir(); }));
+  const fFactura = $('#fFactura', dlg);
+  if (fFactura) fFactura.onsubmit = e => { e.preventDefault(); act(async () => { await api('PATCH', `/api/rentas/${id}`, { facturada: fFactura.elements.facturada.checked, factura_folio: fFactura.elements.factura_folio.value }); toast('Factura guardada'); reabrir(); }); };
   $$('[data-delpago]', dlg).forEach(b => b.onclick = () => act(async () => { if (confirm('¿Quitar este pago?')) { await api('DELETE', `/api/pagos/${b.dataset.delpago}`); reabrir(); } }));
   const fPago = $('#fPago', dlg);
-  if (fPago) fPago.onsubmit = e => { e.preventDefault(); const f = new FormData(fPago); act(async () => { await api('POST', `/api/rentas/${id}/pagos`, { monto: f.get('monto'), tipo: f.get('tipo') }); reabrir(); }); };
+  if (fPago) fPago.onsubmit = e => { e.preventDefault(); const f = new FormData(fPago); act(async () => { await api('POST', `/api/rentas/${id}/pagos`, { monto: f.get('monto'), tipo: f.get('tipo'), forma: f.get('forma') }); reabrir(); }); };
   $('#fExtra', dlg).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); act(async () => { await api('PATCH', `/api/rentas/${id}`, Object.fromEntries(f)); toast('Guardado'); reabrir(); }); };
   const lista = $('#equipoLista', dlg);
   if (lista) {

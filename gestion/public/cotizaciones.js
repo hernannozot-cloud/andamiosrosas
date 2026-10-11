@@ -66,7 +66,8 @@ async function abrirCotizacion(id) {
     <table style="margin-top:10px">
       <tr><td>Renta (${c.dias} d)</td><td class="r money">${mxn(c.subtotal)}</td></tr>
       <tr><td>Traslado / logística</td><td class="r money">${mxn(c.logistico)}</td></tr>
-      <tr><td>IVA (${c.iva_pct}%)</td><td class="r money">${mxn(c.iva)}</td></tr>
+      ${c.renta_id ? `<tr><td>IVA (${c.iva_pct}%)</td><td class="r money">${mxn(c.iva)}</td></tr>`
+        : `<tr><td><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit;font-weight:400"><input type="checkbox" id="chkIvaCot" class="chk" ${c.iva_pct > 0 ? 'checked' : ''}> Con IVA (16%) <span class="muted">· quítalo si paga en efectivo sin IVA</span></label></td><td class="r money">${mxn(c.iva)}</td></tr>`}
       <tr><td><b>Total</b></td><td class="r money">${mxn(c.total)}</td></tr></table>
     ${c.notas ? `<p class="muted" style="margin-top:10px">${esc(c.notas)}</p>` : ''}
     ${c.renta_id ? '' : `<label>Estatus</label><select id="estCot">${['Pendiente', 'Contratada', 'No contratada'].map(e => `<option ${c.estatus === e ? 'selected' : ''}>${e}</option>`).join('')}</select>`}
@@ -79,6 +80,8 @@ async function abrirCotizacion(id) {
     <div class="actions"><a class="btn primary" href="/api/cotizaciones/${c.id}/pdf" target="_blank" rel="noopener">Ver / descargar PDF</a>
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
       ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>`);
+  const chkIva = $('#chkIvaCot', dlg);
+  if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); abrirCotizacion(id); refrescar(); });
   const est = $('#estCot', dlg);
   if (est) est.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { estatus: est.value }); toast('Estatus actualizado'); abrirCotizacion(id); refrescar(); });
   const ver = $('#verRenta', dlg);
