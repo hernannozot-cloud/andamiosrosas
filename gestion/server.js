@@ -345,7 +345,8 @@ function cotizacionPorId(id) {
 const todasCotizaciones = () => { expirarCotizaciones(); return all('SELECT * FROM cotizaciones ORDER BY fecha DESC, id DESC').map(cotizacionCompleta); };
 const siguienteFolio = () => `COT${String(get('SELECT COALESCE(MAX(CAST(SUBSTR(folio, 4) AS INTEGER)), 0) n FROM cotizaciones').n + 1).padStart(3, '0')}`;
 
-function crearCotizacion(b) {
+// Valida los datos de una cotización (nueva o editada) y calcula precios y subtotal.
+function prepararCotizacion(b) {
   const dias = Number(b.dias);
   if (!Number.isInteger(dias) || dias < 1 || dias > 365) throw bad('Días de renta inválidos');
   const nombre = String(b.nombre || '').trim();
@@ -377,16 +378,37 @@ function crearCotizacion(b) {
     l.precio = manual !== null ? manual : l.categoria === 'andamio' ? AR.precioAndamioPorDia(dias, nAndamios) : l.renta_dia;
     subtotal += l.cantidad * l.precio * dias;
   }
+  const clienteId = Number(b.cliente_id) || null;
+  if (clienteId && !get('SELECT id FROM clientes WHERE id = ?', clienteId)) throw bad('Cliente no encontrado');
+  return { dias, nombre, fecha, logistico, ivaPct, lineas, subtotal, clienteId,
+    telefono: String(b.telefono || '').trim() || null, direccion: b.direccion || null,
+    traslado: b.fecha_traslado || null, recoleccion: b.fecha_recoleccion || null, notas: b.notas || null };
+}
+
+function crearCotizacion(b) {
+  const d = prepararCotizacion(b);
   return tx(() => {
-    let clienteId = Number(b.cliente_id) || null;
-    if (clienteId && !get('SELECT id FROM clientes WHERE id = ?', clienteId)) throw bad('Cliente no encontrado');
     const id = Number(run(`INSERT INTO cotizaciones (folio, fecha, cliente_id, nombre, telefono, direccion, dias, fecha_traslado, fecha_recoleccion,
       subtotal, logistico, iva_pct, estatus, notas, creada, pendiente_desde) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    siguienteFolio(), fecha, clienteId, nombre, String(b.telefono || '').trim() || null, b.direccion || null, dias,
-    b.fecha_traslado || null, b.fecha_recoleccion || null, subtotal, logistico, ivaPct,
-    'Pendiente', b.notas || null, new Date().toISOString(), fecha).lastInsertRowid); // toda cotización nueva nace Pendiente
-    for (const l of lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
+    siguienteFolio(), d.fecha, d.clienteId, d.nombre, d.telefono, d.direccion, d.dias, d.traslado, d.recoleccion, d.subtotal, d.logistico, d.ivaPct,
+    'Pendiente', d.notas, new Date().toISOString(), d.fecha).lastInsertRowid); // toda cotización nueva nace Pendiente
+    for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     return id;
+  });
+}
+
+// Edición completa de una cotización que aún no se convirtió en renta. Conserva folio, estatus y vigencia.
+function actualizarCotizacion(id, b) {
+  const c = get('SELECT * FROM cotizaciones WHERE id = ?', id);
+  if (!c) throw new HttpError(404, 'Cotización no encontrada');
+  if (c.renta_id) throw bad('Esta cotización ya se convirtió en renta: los cambios se hacen desde la renta');
+  const d = prepararCotizacion(b);
+  tx(() => {
+    run(`UPDATE cotizaciones SET fecha = ?, cliente_id = ?, nombre = ?, telefono = ?, direccion = ?, dias = ?, fecha_traslado = ?, fecha_recoleccion = ?,
+      subtotal = ?, logistico = ?, iva_pct = ?, notas = ? WHERE id = ?`,
+    d.fecha, d.clienteId, d.nombre, d.telefono, d.direccion, d.dias, d.traslado, d.recoleccion, d.subtotal, d.logistico, d.ivaPct, d.notas, id);
+    run('DELETE FROM cotizacion_items WHERE cotizacion_id = ?', id);
+    for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
   });
 }
 
@@ -769,6 +791,7 @@ route('GET', /^\/api\/utilizacion$/, () => {
 route('GET', /^\/api\/cotizaciones$/, () => todasCotizaciones());
 route('GET', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => cotizacionPorId(id));
 route('POST', /^\/api\/cotizaciones$/, (ctx) => cotizacionPorId(crearCotizacion(ctx.body)));
+route('PUT', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => { actualizarCotizacion(id, ctx.body); return cotizacionPorId(id); });
 route('PATCH', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   const c = get('SELECT * FROM cotizaciones WHERE id = ?', id);
   if (!c) throw new HttpError(404, 'Cotización no encontrada');

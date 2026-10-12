@@ -78,11 +78,14 @@ async function abrirCotizacion(id) {
       <div style="grid-column:1/-1"><button class="btn primary" type="submit">Convertir en renta</button></div></form>
     <p class="error" id="convErr"></p>`}
     <div class="actions"><a class="btn primary" href="/api/cotizaciones/${c.id}/pdf" target="_blank" rel="noopener">Ver / descargar PDF</a>
+      ${c.renta_id ? '' : '<button class="btn" type="button" id="editarCot">✏️ Editar cotización</button>'}
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
       <button class="btn" type="button" id="copiarMsgCot">Copiar mensaje</button>
       ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>
     <p class="muted" style="margin-top:8px">El mensaje sale de la cuenta de WhatsApp que esté abierta en este aparato. En computadora se abre <b>WhatsApp Web</b>: para que salga del número de la empresa, vincula ahí tu cuenta de <b>WhatsApp Business</b> (app empresarial → Dispositivos vinculados). También puedes tocar <b>Copiar mensaje</b> y pegarlo en el chat del cliente dentro de WhatsApp Business.</p>`);
   $('#copiarMsgCot', dlg).onclick = () => copiarTexto(msgCotizacion(c));
+  const editar = $('#editarCot', dlg);
+  if (editar) editar.onclick = () => act(() => formularioCotizacion(c));
   const chkIva = $('#chkIvaCot', dlg);
   if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); abrirCotizacion(id); refrescar(); });
   const est = $('#estCot', dlg);
@@ -101,37 +104,51 @@ async function abrirCotizacion(id) {
   };
 }
 
-async function nuevaCotizacion() {
+const nuevaCotizacion = () => formularioCotizacion(null);
+
+// Formulario de cotización: sin argumento crea una nueva; con una cotización (c) la edita.
+async function formularioCotizacion(c) {
   const [clientes, tipos] = await Promise.all([api('GET', '/api/clientes'), api('GET', '/api/tipos')]);
-  const lista = tipos.filter(t => t.operativos > 0);
-  abrirDlg(`${dlgHead('Nueva cotización')}
+  // Al editar también se muestran las piezas que ya traía la cotización, aunque hoy no haya existencia.
+  const lista = tipos.filter(t => t.operativos > 0 || (c && c.items.some(i => i.tipo === t.tipo)));
+  const enCot = tipo => (c ? c.items.find(i => i.tipo === tipo) : null);
+  // Un precio que coincide con el tabulador se deja en blanco (sigue al tabulador si cambias días o cantidad);
+  // uno distinto se conserva como precio manual.
+  const nAndCot = c ? c.items.reduce((s, i) => s + (lista.find(t => t.tipo === i.tipo)?.categoria === 'andamio' ? i.cantidad : 0), 0) : 0;
+  const precioInicial = t => {
+    const i = enCot(t.tipo);
+    if (!i) return '';
+    const auto = t.categoria === 'andamio' ? AR.precioAndamioPorDia(c.dias, nAndCot || 1) : t.renta_dia;
+    return Math.abs(i.precio_dia - auto) > 0.005 ? i.precio_dia : '';
+  };
+  abrirDlg(`${dlgHead(c ? `Editar ${esc(c.folio)}` : 'Nueva cotización')}
     <form id="fCot">
       <label>Cliente existente (opcional)</label>
-      <select name="cliente_id"><option value="">— Cliente nuevo / prospecto —</option>${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.telefono ? ' · ' + esc(c.telefono) : ''}</option>`).join('')}</select>
-      <div class="f2"><div><label>Nombre</label><input name="nombre" required></div><div><label>Teléfono / WhatsApp</label><input name="telefono" inputmode="tel"></div></div>
-      <div class="f2"><div><label>Fecha de cotización</label><input name="fecha" type="date" value="${hoyStr()}" required></div>
-        <div><label>Días de renta</label><input name="dias" type="number" min="1" max="365" value="5" required></div></div>
-      <div class="f2"><div><label>Fecha de traslado (opcional)</label><input name="fecha_traslado" type="date"></div>
-        <div><label>Fecha de recolección (opcional)</label><input name="fecha_recoleccion" type="date"></div></div>
-      <label>Dirección</label><input name="direccion">
+      <select name="cliente_id"><option value="">— Cliente nuevo / prospecto —</option>${clientes.map(cl => `<option value="${cl.id}" ${c && c.cliente_id === cl.id ? 'selected' : ''}>${esc(cl.nombre)}${cl.telefono ? ' · ' + esc(cl.telefono) : ''}</option>`).join('')}</select>
+      <div class="f2"><div><label>Nombre</label><input name="nombre" required value="${esc(c?.nombre || '')}"></div><div><label>Teléfono / WhatsApp</label><input name="telefono" inputmode="tel" value="${esc(c?.telefono || '')}"></div></div>
+      <div class="f2"><div><label>Fecha de cotización</label><input name="fecha" type="date" value="${c?.fecha || hoyStr()}" required></div>
+        <div><label>Días de renta</label><input name="dias" type="number" min="1" max="365" value="${c?.dias || 5}" required></div></div>
+      <div class="f2"><div><label>Fecha de traslado (opcional)</label><input name="fecha_traslado" type="date" value="${c?.fecha_traslado || ''}"></div>
+        <div><label>Fecha de recolección (opcional)</label><input name="fecha_recoleccion" type="date" value="${c?.fecha_recoleccion || ''}"></div></div>
+      <label>Dirección</label><input name="direccion" value="${esc(c?.direccion || '')}">
       <h3>Piezas</h3>
       <div id="tiposCot">${lista.map(t => `<div class="pick" data-tipo="${esc(t.tipo)}">
         ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
         <div class="grow"><div class="t">${esc(t.tipo)}</div></div>
-        <div><label style="margin:0">Cant.</label><input class="q" type="number" min="0" value="0"></div>
-        <div><label style="margin:0">$/día</label><input class="p" type="number" step="0.01" min="0"></div></div>`).join('')}</div>
-      <div class="f2"><div><label>Traslado / logística ($)</label><input name="logistico" type="number" step="0.01" min="0" value="0"></div>
-        <div><label>Estatus</label><div class="badge warn" style="margin-top:6px">Pendiente</div>
-          <div class="muted" style="margin-top:4px">Pasa sola a "No contratada" a los 15 días.</div></div></div>
-      <label>Notas</label><textarea name="notas" rows="2" placeholder="Incluye llantas, escalera…"></textarea>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="iva" checked style="width:auto"> Agregar IVA (16%)</label>
+        <div><label style="margin:0">Cant.</label><input class="q" type="number" min="0" value="${enCot(t.tipo)?.cantidad || 0}"></div>
+        <div><label style="margin:0">$/día</label><input class="p" type="number" step="0.01" min="0" value="${precioInicial(t)}"></div></div>`).join('')}</div>
+      <div class="f2"><div><label>Traslado / logística ($)</label><input name="logistico" type="number" step="0.01" min="0" value="${c?.logistico ?? 0}"></div>
+        <div><label>Estatus</label>${c ? `<div style="margin-top:6px">${badgeCot(c)}</div><div class="muted" style="margin-top:4px">Editar no cambia el estatus ni la vigencia.</div>`
+          : `<div class="badge warn" style="margin-top:6px">Pendiente</div><div class="muted" style="margin-top:4px">Pasa sola a "No contratada" a los 15 días.</div>`}</div></div>
+      <label>Notas</label><textarea name="notas" rows="2" placeholder="Incluye llantas, escalera…">${esc(c?.notas || '')}</textarea>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="iva" ${!c || c.iva_pct > 0 ? 'checked' : ''} style="width:auto"> Agregar IVA (16%)</label>
       <div class="total"><div class="muted">TOTAL DE LA COTIZACIÓN</div><div class="n" id="totalPrev">$0</div><div class="muted" id="totalDet"></div></div>
       <p class="error" id="cotErr"></p>
-      <div class="actions"><button class="btn primary" type="submit">Guardar cotización</button><button class="btn x" type="button">Cancelar</button></div>
+      <div class="actions"><button class="btn primary" type="submit">${c ? 'Guardar cambios' : 'Guardar cotización'}</button><button class="btn x" type="button">Cancelar</button></div>
     </form>`);
   const form = $('#fCot');
   const val = n => form.elements[n].value;
-  let recolAuto = true;
+  let recolAuto = !(c && c.fecha_recoleccion);
 
   function recalc() {
     const dias = Math.max(1, parseInt(val('dias'), 10) || 1);
@@ -171,9 +188,14 @@ async function nuevaCotizacion() {
       logistico: val('logistico'), notas: val('notas'), iva_pct: form.elements.iva.checked ? 16 : 0, items,
     };
     try {
-      const c = await api('POST', '/api/cotizaciones', body);
-      dlg.close(); toast(`Cotización ${c.folio} guardada`);
-      filtroCot = 'Pendiente'; busquedaCot = ''; ir('cotizaciones'); abrirCotizacion(c.id);
+      if (c) { // edición: se conserva el folio, el estatus y la vigencia
+        const g = await api('PUT', `/api/cotizaciones/${c.id}`, body);
+        dlg.close(); toast(`Cotización ${g.folio} actualizada`); refrescar(); abrirCotizacion(g.id);
+      } else {
+        const g = await api('POST', '/api/cotizaciones', body);
+        dlg.close(); toast(`Cotización ${g.folio} guardada`);
+        filtroCot = 'Pendiente'; busquedaCot = ''; ir('cotizaciones'); abrirCotizacion(g.id);
+      }
     } catch (err) { $('#cotErr').textContent = err.message; }
   };
 }
