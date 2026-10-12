@@ -1,13 +1,24 @@
 'use strict';
 // Apartado de Cotizaciones. Se carga ANTES de app.js; usa sus ayudantes ($, esc, mxn, api, act, abrirDlg…) al ejecutarse.
 const sumaDias = (s, n) => { const d = new Date(`${s}T00:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
+// Las llantas se cotizan por JUEGO de 4: en el sistema siguen siendo piezas (1 juego = 4 llantas), pero en la cotización
+// se muestran y se capturan como "Juego de 4 llantas" (cantidad de juegos y precio por juego).
+const JUEGOS = { Llanta: { nombre: 'Juego de 4 llantas', n: 4 } };
+const factorJuego = tipo => JUEGOS[tipo]?.n || 1;
+const nombreCot = tipo => JUEGOS[tipo]?.nombre || tipo;
+const mostrarItem = i => {
+  const f = factorJuego(i.tipo);
+  return f > 1 && i.cantidad % f === 0
+    ? { nombre: nombreCot(i.tipo), cantidad: i.cantidad / f, precio: i.precio_dia * f }
+    : { nombre: i.tipo, cantidad: i.cantidad, precio: i.precio_dia }; // si no completa un juego, se deja en piezas
+};
 // Pendiente muestra cuántos días le quedan antes de pasar sola a "No contratada".
 const badgeCot = c => {
   if (c.estatus !== 'Pendiente') return `<span class="badge ${c.estatus === 'Contratada' ? 'ok' : ''}">${esc(c.estatus)}${c.cerrada_auto ? ' · automático' : ''}</span>`;
   const n = c.restantes;
   return `<span class="badge ${n <= 3 ? 'bad' : 'warn'}">Pendiente · vence ${n <= 0 ? 'hoy' : n === 1 ? 'mañana' : `en ${n} d`}</span>`;
 };
-const piezasCot = c => c.items.map(i => `${i.cantidad} ${esc(i.tipo)}`).join(' · ') || 'Sin piezas';
+const piezasCot = c => c.items.map(i => { const m = mostrarItem(i); return `${m.cantidad} ${esc(m.nombre)}`; }).join(' · ') || 'Sin piezas';
 const rowCot = c => `<div class="row" data-cot="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)} <span class="muted">${esc(c.folio)}</span></div>
   <div class="s">${piezasCot(c)} · ${c.dias} día${c.dias > 1 ? 's' : ''} · ${fechaCorta(c.fecha)}</div></div>
   <div style="text-align:right">${badgeCot(c)}<div class="money">${mxn(c.total)}</div></div></div>`;
@@ -42,9 +53,9 @@ async function vCotizaciones() {
 
 function msgCotizacion(c) {
   const l = [`Hola ${c.nombre}, te comparto tu cotización ${c.folio} de Andamios Rosas:`];
-  c.items.forEach(i => l.push(`• ${i.cantidad} ${i.tipo} × ${c.dias} día${c.dias > 1 ? 's' : ''} (${mxn(i.precio_dia)} por día c/u)`));
+  c.items.forEach(i => { const m = mostrarItem(i); l.push(`• ${m.cantidad} ${m.nombre} × ${c.dias} día${c.dias > 1 ? 's' : ''} (${mxn(m.precio)} por día c/u)`); });
   l.push(`• Renta: ${mxn(c.subtotal)}`);
-  if (c.logistico) l.push(`• Traslado / logística: ${mxn(c.logistico)}`);
+  if (c.logistico) l.push(`• Traslado, montaje, desmontaje y recolección: ${mxn(c.logistico)}`);
   if (c.iva) l.push(`• IVA (${c.iva_pct}%): ${mxn(c.iva)}`);
   l.push(`• *Total: ${mxn(c.total)}*`, '¿Te la confirmo?');
   return l.join('\n');
@@ -62,10 +73,10 @@ async function abrirCotizacion(id) {
     ${c.telefono ? `<p class="muted">📞 ${esc(c.telefono)}</p>` : ''}${c.direccion ? `<p class="muted">📍 ${esc(c.direccion)}</p>` : ''}
     ${c.fecha_traslado || c.fecha_recoleccion ? `<p class="muted">🚚 Traslado ${c.fecha_traslado ? fecha(c.fecha_traslado) : '—'} · Recolección ${c.fecha_recoleccion ? fecha(c.fecha_recoleccion) : '—'}</p>` : ''}
     <table><tr><th>Pieza</th><th class="r">Cant.</th><th class="r">$/día</th></tr>
-      ${c.items.map(i => `<tr><td>${esc(i.tipo)}</td><td class="r">${i.cantidad}</td><td class="r">${mxn(i.precio_dia)}</td></tr>`).join('')}</table>
+      ${c.items.map(i => { const m = mostrarItem(i); return `<tr><td>${esc(m.nombre)}</td><td class="r">${m.cantidad}</td><td class="r">${mxn(m.precio)}</td></tr>`; }).join('')}</table>
     <table style="margin-top:10px">
       <tr><td>Renta (${c.dias} d)</td><td class="r money">${mxn(c.subtotal)}</td></tr>
-      <tr><td>Traslado / logística</td><td class="r money">${mxn(c.logistico)}</td></tr>
+      <tr><td>Traslado, montaje, desmontaje y recolección</td><td class="r money">${mxn(c.logistico)}</td></tr>
       ${c.renta_id ? `<tr><td>IVA (${c.iva_pct}%)</td><td class="r money">${mxn(c.iva)}</td></tr>`
         : `<tr><td><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit;font-weight:400"><input type="checkbox" id="chkIvaCot" class="chk" ${c.iva_pct > 0 ? 'checked' : ''}> Con IVA (16%) <span class="muted">· quítalo si paga en efectivo sin IVA</span></label></td><td class="r money">${mxn(c.iva)}</td></tr>`}
       <tr><td><b>Total</b></td><td class="r money">${mxn(c.total)}</td></tr></table>
@@ -115,11 +126,14 @@ async function formularioCotizacion(c) {
   // Un precio que coincide con el tabulador se deja en blanco (sigue al tabulador si cambias días o cantidad);
   // uno distinto se conserva como precio manual.
   const nAndCot = c ? c.items.reduce((s, i) => s + (lista.find(t => t.tipo === i.tipo)?.categoria === 'andamio' ? i.cantidad : 0), 0) : 0;
+  // En el formulario, las llantas se capturan en juegos de 4 (cantidad de juegos y precio por juego por día).
+  const juegosIniciales = t => Math.ceil((enCot(t.tipo)?.cantidad || 0) / factorJuego(t.tipo));
   const precioInicial = t => {
     const i = enCot(t.tipo);
     if (!i) return '';
+    const f = factorJuego(t.tipo);
     const auto = t.categoria === 'andamio' ? AR.precioAndamioPorDia(c.dias, nAndCot || 1) : t.renta_dia;
-    return Math.abs(i.precio_dia - auto) > 0.005 ? i.precio_dia : '';
+    return Math.abs(i.precio_dia - auto) > 0.005 ? Math.round(i.precio_dia * f * 100) / 100 : '';
   };
   abrirDlg(`${dlgHead(c ? `Editar ${esc(c.folio)}` : 'Nueva cotización')}
     <form id="fCot">
@@ -134,10 +148,10 @@ async function formularioCotizacion(c) {
       <h3>Piezas</h3>
       <div id="tiposCot">${lista.map(t => `<div class="pick" data-tipo="${esc(t.tipo)}">
         ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
-        <div class="grow"><div class="t">${esc(t.tipo)}</div></div>
-        <div><label style="margin:0">Cant.</label><input class="q" type="number" min="0" value="${enCot(t.tipo)?.cantidad || 0}"></div>
+        <div class="grow"><div class="t">${esc(nombreCot(t.tipo))}</div></div>
+        <div><label style="margin:0">Cant.</label><input class="q" type="number" min="0" value="${juegosIniciales(t)}"></div>
         <div><label style="margin:0">$/día</label><input class="p" type="number" step="0.01" min="0" value="${precioInicial(t)}"></div></div>`).join('')}</div>
-      <div class="f2"><div><label>Traslado / logística ($)</label><input name="logistico" type="number" step="0.01" min="0" value="${c?.logistico ?? 0}"></div>
+      <div class="f2"><div><label>Traslado, montaje, desmontaje y recolección ($)</label><input name="logistico" type="number" step="0.01" min="0" value="${c?.logistico ?? 0}"></div>
         <div><label>Estatus</label>${c ? `<div style="margin-top:6px">${badgeCot(c)}</div><div class="muted" style="margin-top:4px">Editar no cambia el estatus ni la vigencia.</div>`
           : `<div class="badge warn" style="margin-top:6px">Pendiente</div><div class="muted" style="margin-top:4px">Pasa sola a "No contratada" a los 15 días.</div>`}</div></div>
       <label>Notas</label><textarea name="notas" rows="2" placeholder="Incluye llantas, escalera…">${esc(c?.notas || '')}</textarea>
@@ -156,7 +170,7 @@ async function formularioCotizacion(c) {
     const nAndamios = filas.filter(f => f.t.categoria === 'andamio').reduce((s, f) => s + f.q, 0);
     let sub = 0;
     for (const { el, t, q } of filas) {
-      const auto = t.categoria === 'andamio' ? AR.precioAndamioPorDia(dias, nAndamios || 1) : t.renta_dia;
+      const auto = t.categoria === 'andamio' ? AR.precioAndamioPorDia(dias, nAndamios || 1) : t.renta_dia * factorJuego(t.tipo);
       const inp = $('.p', el); inp.placeholder = auto;
       sub += q * (inp.value !== '' ? Number(inp.value) : auto) * dias;
     }
@@ -181,7 +195,11 @@ async function formularioCotizacion(c) {
 
   form.onsubmit = async e => {
     e.preventDefault();
-    const items = $$('.pick[data-tipo]', form).map(el => ({ tipo: el.dataset.tipo, cantidad: parseInt($('.q', el).value, 10) || 0, precio_dia: $('.p', el).value }));
+    // Las llantas se guardan como piezas: juegos × 4, y el precio por juego se divide entre 4.
+    const items = $$('.pick[data-tipo]', form).map(el => {
+      const f = factorJuego(el.dataset.tipo), p = $('.p', el).value;
+      return { tipo: el.dataset.tipo, cantidad: (parseInt($('.q', el).value, 10) || 0) * f, precio_dia: p === '' ? '' : Number(p) / f };
+    });
     const body = {
       cliente_id: val('cliente_id') || null, nombre: val('nombre'), telefono: val('telefono'), fecha: val('fecha'), dias: Number(val('dias')),
       fecha_traslado: val('fecha_traslado') || null, fecha_recoleccion: val('fecha_recoleccion') || null, direccion: val('direccion'),

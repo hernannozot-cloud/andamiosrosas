@@ -840,7 +840,7 @@ route('POST', /^\/api\/cotizaciones\/(\d+)\/convertir$/, (ctx, id) => {
     fecha_inicio: esFecha(ctx.body.fecha_inicio) ? ctx.body.fecha_inicio : (c.fecha_traslado || hoy()),
     dias: c.dias, estado: ctx.body.estado === 'activa' ? 'activa' : 'apartada', direccion: c.direccion,
     items: c.items.map(i => ({ tipo: i.tipo, cantidad: i.cantidad, precio_dia: i.precio_dia })),
-    extra: c.logistico, extra_concepto: c.logistico ? `Logística (${c.folio})` : null, iva_pct: c.iva_pct,
+    extra: c.logistico, extra_concepto: c.logistico ? `Traslado, montaje, desmontaje y recolección (${c.folio})` : null, iva_pct: c.iva_pct,
     notas: `Cotización ${c.folio}${c.notas ? ' · ' + c.notas : ''}`,
   });
   const cli = get('SELECT cliente_id FROM rentas WHERE id = ?', rid).cliente_id;

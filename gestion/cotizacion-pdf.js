@@ -31,13 +31,23 @@ function logoDataUri() {
   return logoUri;
 }
 
+// Las llantas se cotizan por juego de 4: en el sistema son piezas (1 juego = 4 llantas).
+const JUEGOS = { Llanta: { nombre: 'Juego de 4 llantas', n: 4 } };
+const comoSeCotiza = i => {
+  const j = JUEGOS[i.tipo];
+  return j && i.cantidad % j.n === 0
+    ? { nombre: j.nombre, cantidad: i.cantidad / j.n, precio: i.precio_dia * j.n }
+    : { nombre: i.tipo, cantidad: i.cantidad, precio: i.precio_dia }; // si no completa un juego, se deja en piezas
+};
+
 function htmlCotizacion(c) {
   const unico = c.items.length === 1;
   const filas = c.items.map((i, k) => {
     const sub = unico ? c.subtotal : i.cantidad * i.precio_dia * c.dias; // un solo renglón: cuadra al centavo con el total guardado
-    return `<tr class="${k % 2 ? 'alt' : ''}"><td class="desc">${esc(i.tipo)}</td><td>${i.cantidad}</td><td>${money(i.precio_dia)}</td><td>${c.dias}</td><td class="r">${money(sub)}</td></tr>`;
+    const m = comoSeCotiza(i);
+    return `<tr class="${k % 2 ? 'alt' : ''}"><td class="desc">${esc(m.nombre)}</td><td>${m.cantidad}</td><td>${money(m.precio)}</td><td>${c.dias}</td><td class="r">${money(sub)}</td></tr>`;
   });
-  filas.push(`<tr class="${c.items.length % 2 ? 'alt' : ''}"><td class="desc">Transporte + Instalación</td><td>1</td><td>${c.logistico ? '—' : money(0)}</td><td>${c.logistico ? '—' : c.dias}</td><td class="r">${money(c.logistico)}</td></tr>`);
+  filas.push(`<tr class="${c.items.length % 2 ? 'alt' : ''}"><td class="desc">Traslado, montaje, desmontaje y recolección</td><td>1</td><td>${c.logistico ? '—' : money(0)}</td><td>${c.logistico ? '—' : c.dias}</td><td class="r">${money(c.logistico)}</td></tr>`);
   const relleno = Math.max(0, 8 - filas.length);
   for (let k = 0; k < relleno; k++) filas.push(`<tr class="${(filas.length) % 2 ? 'alt' : ''} vacia"><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`);
   const traslado = c.fecha_traslado ? `<div>Fecha de traslado: <b>${esc(fechaLarga(c.fecha_traslado))}</b></div>` : '';
@@ -90,6 +100,23 @@ table.t { width: 100%; border-collapse: collapse; margin-top: 8px; }
 </div><div class="pie">Andamios Rosas · WhatsApp ${WHATSAPP} · andamiosrosas.com</div></div></body></html>`;
 }
 
+// Espera (hasta límite ms) a que el PDF exista y deje de crecer; regresa su contenido o null.
+async function esperarPdf(pdfPath, limite = 30000) {
+  const inicio = Date.now();
+  let anterior = -1;
+  while (Date.now() - inicio < limite) {
+    try {
+      if (fs.existsSync(pdfPath)) {
+        const tam = fs.statSync(pdfPath).size;
+        if (tam > 500 && tam === anterior) return fs.readFileSync(pdfPath);
+        anterior = tam;
+      }
+    } catch { /* el archivo aún se está escribiendo: se reintenta */ }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return null;
+}
+
 // Un PDF a la vez: evita abrir varios navegadores simultáneos en equipos con poca memoria.
 let cola = Promise.resolve();
 function generarPdf(html) {
@@ -102,11 +129,13 @@ function generarPdf(html) {
     fs.writeFileSync(htmlPath, html, 'utf8');
     const args = ['--headless', '--disable-gpu', '--no-first-run', '--disable-extensions', '--no-pdf-header-footer',
       `--user-data-dir=${path.join(dir, 'perfil')}`, `--print-to-pdf=${pdfPath}`, pathToFileURL(htmlPath).href];
+    // El lanzador de Edge puede terminar de inmediato y dejar que otro proceso escriba el PDF unos segundos
+    // después, así que no basta con esperar a que termine el comando: hay que esperar a que exista el archivo.
     execFile(exe, args, { timeout: 45000, windowsHide: true }, err => {
-      let pdf = null;
-      try { if (fs.existsSync(pdfPath)) pdf = fs.readFileSync(pdfPath); } catch { /* se reporta abajo */ }
-      fs.rm(dir, { recursive: true, force: true }, () => {});
-      if (pdf && pdf.length > 500) resolve(pdf); else reject(err || new Error('No se generó el PDF'));
+      esperarPdf(pdfPath).then(pdf => {
+        fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 400 }, () => {});
+        if (pdf) resolve(pdf); else reject(err || new Error('No se generó el PDF'));
+      });
     });
   }));
   cola = job.catch(() => {});
