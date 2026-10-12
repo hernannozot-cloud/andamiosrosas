@@ -10,6 +10,25 @@ const hoyStr = () => new Date().toLocaleDateString('en-CA');
 const fecha = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 const fechaCorta = s => s ? new Date(`${s}T00:00:00`).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' }) : '';
 
+// ---------- WhatsApp ----------
+// Un enlace de WhatsApp no puede elegir la cuenta: sale de la que esté abierta en el aparato. En computadora se usa
+// WhatsApp Web (sale de la cuenta vinculada ahí, p. ej. la empresarial); en celular se abre la app instalada.
+// Además, "Copiar mensaje" permite pegarlo en el chat de la app empresarial.
+const esEscritorio = !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const enlaceWhatsApp = (telSinMas, msg) => esEscritorio
+  ? `https://web.whatsapp.com/send?phone=${telSinMas}&text=${encodeURIComponent(msg)}`
+  : `https://wa.me/${telSinMas}?text=${encodeURIComponent(msg)}`;
+async function copiarTexto(texto) {
+  try { await navigator.clipboard.writeText(texto); } catch { // sin HTTPS (p. ej. desde el celular por Tailscale) no existe el portapapeles moderno
+    const ta = document.createElement('textarea');
+    ta.value = texto; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, texto.length);
+    const ok = document.execCommand('copy'); ta.remove();
+    if (!ok) { toast('No se pudo copiar. Selecciona el texto y cópialo a mano.', true); return; }
+  }
+  toast('Mensaje copiado. Pégalo en el chat de WhatsApp Business.');
+}
+
 let toastTimer;
 function toast(msg, err = false) {
   const t = $('#toast');
@@ -124,7 +143,7 @@ async function abrirRenta(id) {
   if (r.estado === 'activa') msg += ` Tu renta ${r.folio} ${r.vencida ? 'venció' : 'vence'} el ${fecha(r.fecha_fin)}.`;
   if (r.saldo > 0) msg += ` Tienes un saldo pendiente de ${mxn(r.saldo)}.`;
   msg += ' ¿Coordinamos? ¡Gracias!';
-  const wa = tel ? `https://wa.me/${tel.slice(1)}?text=${encodeURIComponent(msg)}` : null;
+  const wa = tel ? enlaceWhatsApp(tel.slice(1), msg) : null;
   // Tipos de pieza para la sección "Equipo entregado": andamios primero, luego accesorios.
   const tiposEq = r.estado === 'cancelada' ? [] : [...(await act(() => api('GET', '/api/tipos')) || [])]
     .sort((a, b) => (a.categoria === 'andamio' ? 0 : 1) - (b.categoria === 'andamio' ? 0 : 1) || a.tipo.localeCompare(b.tipo));
@@ -177,6 +196,7 @@ async function abrirRenta(id) {
       ${r.estado === 'apartada' ? '<button class="btn primary" id="entregar">Marcar entregada</button>' : ''}
       ${r.estado === 'activa' ? '<button class="btn primary" id="devolver">Registrar devolución</button>' : ''}
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
+      <button class="btn" type="button" id="copiarMsgRenta">Copiar mensaje</button>
       ${r.estado === 'apartada' || r.estado === 'activa' ? '<button class="btn danger" id="cancelar">Cancelar renta</button>' : ''}
     </div>`);
   const reabrir = () => { abrirRenta(id); refrescar(); };
@@ -185,6 +205,7 @@ async function abrirRenta(id) {
   accion('#devolver', () => api('POST', `/api/rentas/${id}/devolver`, {}));
   accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres.')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
   accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación', forma: $('#fPago', dlg).elements.forma.value }));
+  $('#copiarMsgRenta', dlg).onclick = () => copiarTexto(msg);
   const chkIva = $('#chkIva', dlg);
   if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/rentas/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); reabrir(); });
   $$('[data-forma]', dlg).forEach(s => s.onchange = () => act(async () => { await api('PATCH', `/api/pagos/${s.dataset.forma}`, { forma: s.value }); toast('Forma de pago actualizada'); reabrir(); }));

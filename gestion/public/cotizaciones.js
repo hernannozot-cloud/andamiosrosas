@@ -54,7 +54,7 @@ async function abrirCotizacion(id) {
   const c = await act(() => api('GET', `/api/cotizaciones/${id}`));
   if (!c) return;
   const tel = AR.normalizarTelefonoE164(c.telefono || '');
-  const wa = tel ? `https://wa.me/${tel.slice(1)}?text=${encodeURIComponent(msgCotizacion(c))}` : null;
+  const wa = tel ? enlaceWhatsApp(tel.slice(1), msgCotizacion(c)) : null;
   abrirDlg(`${dlgHead(`${esc(c.folio)} · ${esc(c.nombre)}`)}
     <p>${badgeCot(c)} <span class="muted">Cotizada el ${fecha(c.fecha)} · ${c.dias} día${c.dias > 1 ? 's' : ''}</span></p>
     ${c.estatus === 'Pendiente' ? `<p class="muted">⏳ Pasa sola a "No contratada" el ${fecha(c.vence)} (${c.dias_vigencia} días naturales).</p>` : ''}
@@ -79,7 +79,10 @@ async function abrirCotizacion(id) {
     <p class="error" id="convErr"></p>`}
     <div class="actions"><a class="btn primary" href="/api/cotizaciones/${c.id}/pdf" target="_blank" rel="noopener">Ver / descargar PDF</a>
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
-      ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>`);
+      <button class="btn" type="button" id="copiarMsgCot">Copiar mensaje</button>
+      ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>
+    <p class="muted" style="margin-top:8px">El mensaje sale de la cuenta de WhatsApp que esté abierta en este aparato. En computadora se abre <b>WhatsApp Web</b>: para que salga del número de la empresa, vincula ahí tu cuenta de <b>WhatsApp Business</b> (app empresarial → Dispositivos vinculados). También puedes tocar <b>Copiar mensaje</b> y pegarlo en el chat del cliente dentro de WhatsApp Business.</p>`);
+  $('#copiarMsgCot', dlg).onclick = () => copiarTexto(msgCotizacion(c));
   const chkIva = $('#chkIvaCot', dlg);
   if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); abrirCotizacion(id); refrescar(); });
   const est = $('#estCot', dlg);
