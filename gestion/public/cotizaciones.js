@@ -89,7 +89,7 @@ async function abrirCotizacion(id) {
       <div style="grid-column:1/-1"><button class="btn primary" type="submit">Convertir en renta</button></div></form>
     <p class="error" id="convErr"></p>`}
     <div class="actions"><a class="btn primary" href="/api/cotizaciones/${c.id}/pdf" target="_blank" rel="noopener">Ver / descargar PDF</a>
-      ${c.renta_id ? '' : '<button class="btn" type="button" id="editarCot">✏️ Editar cotización</button>'}
+      <button class="btn" type="button" id="editarCot">${c.renta_id ? '✏️ Editar cotización y renta' : '✏️ Editar cotización'}</button>
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
       <button class="btn" type="button" id="copiarMsgCot">Copiar mensaje</button>
       ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>
@@ -136,6 +136,7 @@ async function formularioCotizacion(c) {
     return Math.abs(i.precio_dia - auto) > 0.005 ? Math.round(i.precio_dia * f * 100) / 100 : '';
   };
   abrirDlg(`${dlgHead(c ? `Editar ${esc(c.folio)}` : 'Nueva cotización')}
+    ${c && c.renta_id ? `<p class="muted" style="background:var(--warn-bg,#fff4d6);padding:8px 10px;border-radius:8px">Esta cotización ya es una renta. Los cambios de <b>días, precios, logística e IVA</b> también se aplican a la renta, para que lo cotizado y lo cobrado cuadren. Las cantidades de piezas no se pueden cambiar aquí.</p>` : ''}
     <form id="fCot">
       <label>Cliente existente (opcional)</label>
       <select name="cliente_id"><option value="">— Cliente nuevo / prospecto —</option>${clientes.map(cl => `<option value="${cl.id}" ${c && c.cliente_id === cl.id ? 'selected' : ''}>${esc(cl.nombre)}${cl.telefono ? ' · ' + esc(cl.telefono) : ''}</option>`).join('')}</select>
@@ -191,6 +192,7 @@ async function formularioCotizacion(c) {
   form.elements.dias.oninput = () => { sincronizarRecoleccion(); recalc(); };
   [...$$('#tiposCot input', form), form.elements.logistico].forEach(i => i.oninput = recalc);
   form.elements.iva.onchange = recalc;
+  if (c && c.renta_id) $$('.pick .q', form).forEach(q => { q.readOnly = true; q.title = 'Las piezas ya están asignadas a la renta'; });
   recalc();
 
   form.onsubmit = async e => {
