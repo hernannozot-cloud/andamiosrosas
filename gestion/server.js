@@ -409,6 +409,23 @@ function actualizarCotizacion(id, b) {
     const igual = antes.size === d.lineas.length && d.lineas.every(l => antes.get(l.tipo) === l.cantidad);
     if (!igual) throw bad('Esta cotización ya es una renta: aquí puedes cambiar días, precios, logística e IVA, pero no las piezas (ajústalas en "Equipo entregado" de la renta)');
   }
+  // Una renta apartada (aún no entregada) sigue la fecha de traslado de su cotización: si la mueves, la renta se mueve con ella,
+  // y se revisa que el equipo esté disponible en las nuevas fechas. Una renta ya entregada conserva su fecha de inicio.
+  let nuevoInicio = null;
+  if (c.renta_id) {
+    const ren = get('SELECT estado, fecha_inicio, dias FROM rentas WHERE id = ?', c.renta_id);
+    if (ren.estado === 'apartada') {
+      const inicio = d.traslado && d.traslado !== ren.fecha_inicio ? d.traslado : ren.fecha_inicio;
+      if (inicio !== ren.fecha_inicio || d.dias !== ren.dias) {
+        for (const e of all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ?', c.renta_id)) {
+          if (disponiblesTipo(e.tipo, inicio, d.dias, c.renta_id) < e.cantidad) {
+            throw bad(`No hay ${e.cantidad} de "${e.tipo}" disponibles del ${inicio} al ${addDays(inicio, d.dias)}`);
+          }
+        }
+      }
+      if (inicio !== ren.fecha_inicio) nuevoInicio = inicio;
+    }
+  }
   tx(() => {
     run(`UPDATE cotizaciones SET fecha = ?, cliente_id = ?, nombre = ?, telefono = ?, direccion = ?, dias = ?, fecha_traslado = ?, fecha_recoleccion = ?,
       subtotal = ?, logistico = ?, iva_pct = ?, notas = ? WHERE id = ?`,
@@ -417,9 +434,9 @@ function actualizarCotizacion(id, b) {
     for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     if (c.renta_id) {
       const r = get('SELECT extra_concepto FROM rentas WHERE id = ?', c.renta_id);
-      run('UPDATE rentas SET dias = ?, iva_pct = ?, extra = ?, extra_concepto = ?, direccion = COALESCE(?, direccion) WHERE id = ?',
+      run('UPDATE rentas SET dias = ?, iva_pct = ?, extra = ?, extra_concepto = ?, direccion = COALESCE(?, direccion), fecha_inicio = COALESCE(?, fecha_inicio) WHERE id = ?',
         d.dias, d.ivaPct > 0 ? d.ivaPct : 0, d.logistico,
-        d.logistico > 0 ? (r?.extra_concepto || `Traslado, montaje, desmontaje y recolección (${c.folio})`) : null, d.direccion, c.renta_id);
+        d.logistico > 0 ? (r?.extra_concepto || `Traslado, montaje, desmontaje y recolección (${c.folio})`) : null, d.direccion, nuevoInicio, c.renta_id);
       for (const l of d.lineas) {
         run('UPDATE renta_activos SET precio_dia = ? WHERE renta_id = ? AND activo_id IN (SELECT id FROM activos WHERE tipo = ?)', l.precio, c.renta_id, l.tipo);
       }
