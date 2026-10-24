@@ -33,7 +33,7 @@ function gtag_report_conversion(url) {
 <meta name="description" content="Renta de andamios en Toluca, Metepec, Zinacantepec, Lerma, San Mateo Atenco y Tenango. Entrega e instalación sin costo. Cotiza al instante por WhatsApp.">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/favicon.png">
-<link rel="stylesheet" href="style.css?v=35">
+<link rel="stylesheet" href="style.css?v=37">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -82,13 +82,50 @@ function gtag_report_conversion(url) {
         <span class="hero-tag">Toluca y área metropolitana</span>
         <h1>Renta de <span>andamios</span> rápida y segura para tu obra o proyecto</h1>
         <p>Andamios certificados. Entrega e instalación sin costo en Toluca, Metepec, Zinacantepec, Lerma, San Mateo Atenco, Tenango y zona conurbada. Obtén tu cotización en segundos.</p>
+        <p class="hero-price"><strong>Desde $110 por andamio al día</strong> en rentas de 5 días o más. Entrega e instalación gratis.</p>
         <div class="hero-actions">
-          <a href="#cotizar" class="btn btn-primary">Cotizar ahora</a>
+          <a href="https://wa.me/525539481162?text=Hola%2C%20quiero%20cotizar%20la%20renta%20de%20un%20andamio" class="btn btn-wa" target="_blank" rel="noopener" onclick="gtag_report_conversion();">Cotizar por WhatsApp</a>
           <a href="#catalogo" class="btn btn-outline">Ver catálogo</a>
         </div>
       </div>
       <div class="hero-icon-wrap" aria-hidden="true">
         <img class="hero-icon" src="assets/icono_negro.png" alt="">
+      </div>
+    </div>
+  </section>
+
+  <!-- Cotización rápida -->
+  <section class="section quick-quote" id="cotizacion-rapida">
+    <div class="container">
+      <div class="quick-quote-card">
+        <div class="quick-quote-text">
+          <div class="eyebrow">Cotización rápida</div>
+          <h2>Cotiza en 20 segundos</h2>
+          <p>Déjanos tu nombre y teléfono, cuéntanos qué vas a hacer y te respondemos por WhatsApp el mismo día. Sin compromiso.</p>
+        </div>
+        <form id="quickQuoteForm" class="quick-quote-form">
+          <div class="field">
+            <label for="qqNombre">Nombre</label>
+            <input type="text" id="qqNombre" name="nombre" required autocomplete="name" placeholder="Tu nombre">
+          </div>
+          <div class="field">
+            <label for="qqTelefono">Teléfono</label>
+            <input type="tel" id="qqTelefono" name="telefono" required autocomplete="tel" placeholder="722 000 0000">
+          </div>
+          <div class="field">
+            <label for="qqUso">¿Qué vas a hacer?</label>
+            <select id="qqUso" name="uso" required>
+              <option value="">Elige una opción</option>
+              <option>Pintar fachada o muro</option>
+              <option>Remodelar o reparar</option>
+              <option>Rótulos, luces o decoración</option>
+              <option>Obra o construcción</option>
+              <option>Otro</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">Cotizar por WhatsApp</button>
+          <p class="form-note">Si prefieres elegir tipo de andamio y días, usa la <a href="#cotizar">cotización completa</a>.</p>
+        </form>
       </div>
     </div>
   </section>
@@ -519,6 +556,6 @@ function gtag_report_conversion(url) {
 <div class="toast" id="toast"></div>
 
 <script src="logic.js?v=5"></script>
-<script src="script.js?v=23"></script>
+<script src="script.js?v=25"></script>
 </body>
 </html>

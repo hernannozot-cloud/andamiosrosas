@@ -74,6 +74,20 @@ function abrirEnlaceExterno(url) {
   }
 }
 
+// Aviso por correo de cada cotización enviada: si la persona no termina de mandar el mensaje en
+// WhatsApp, el nombre y el teléfono no se pierden. Si el aviso falla, el WhatsApp sigue igual.
+function enviarLead(datos) {
+  try {
+    const enSitio = /(^|\.)andamiosrosas\.com$/.test(location.hostname);
+    fetch(enSitio ? 'enviar-lead.php' : 'https://andamiosrosas.com/enviar-lead.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...datos, sitio_web: '', origen: ORIGEN_CLIENTE, pagina: location.pathname }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (err) { /* sin aviso por correo, pero el WhatsApp se abre normal */ }
+}
+
 document.getElementById('year').textContent = new Date().getFullYear();
 
 // Mobile nav toggle
@@ -304,6 +318,8 @@ form.addEventListener('submit', (e) => {
   const message = encodeURIComponent(lines.join('\n'));
   const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${message}`;
 
+  enviarLead({ tipo: 'cotización completa', nombre, telefono, mensaje: lines.join('\n') });
+
   // Google Ads: conversion "Solicitar cotizacion"
   if (typeof gtag === 'function') {
     // Conversiones mejoradas: le damos a Google Ads el teléfono y el nombre
@@ -330,6 +346,48 @@ form.addEventListener('submit', (e) => {
 
   abrirEnlaceExterno(url);
 });
+
+// Cotización rápida (hero): nombre + teléfono + uso -> WhatsApp con origen
+const quickForm = document.getElementById('quickQuoteForm');
+if (quickForm) {
+  quickForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nombre = document.getElementById('qqNombre').value.trim();
+    const telefono = document.getElementById('qqTelefono').value.trim();
+    const uso = document.getElementById('qqUso').value;
+    if (!nombre || !telefono || !uso) {
+      showToast('Completa nombre, teléfono y qué vas a hacer.');
+      return;
+    }
+    const lines = [
+      'Hola, quiero cotizar un andamio (cotización rápida):',
+      `• Uso: ${uso}`,
+      `• Nombre: ${nombre}`,
+      `• Teléfono: ${telefono}`,
+      `• Origen: ${ORIGEN_CLIENTE}`,
+    ];
+    const url = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
+
+    enviarLead({ tipo: 'cotización rápida', nombre, telefono, mensaje: lines.join('\n') });
+
+    if (typeof gtag === 'function') {
+      const telefonoE164 = normalizarTelefonoE164(telefono);
+      const [primerNombre, ...restoNombre] = nombre.split(/\s+/);
+      const userData = {};
+      if (telefonoE164) userData.phone_number = telefonoE164;
+      if (primerNombre) {
+        userData.address = { first_name: primerNombre, last_name: restoNombre.join(' ') || undefined };
+      }
+      if (Object.keys(userData).length) gtag('set', 'user_data', userData);
+      gtag('event', 'conversion', {
+        'send_to': 'AW-18382347257/fW7PCKnJ6e0cEPm3sb1E',
+        'value': 1.0,
+        'currency': 'MXN',
+      });
+    }
+    abrirEnlaceExterno(url);
+  });
+}
 
 // Product photo lightbox
 const lightboxOverlay = document.getElementById('lightboxOverlay');
