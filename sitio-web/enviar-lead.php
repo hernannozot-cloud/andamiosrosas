@@ -1,11 +1,11 @@
 <?php
 // Recibe los datos de los formularios de cotización del sitio y los manda por correo,
 // para no perder al prospecto si no termina de enviar el mensaje en WhatsApp.
-// Antes de subirlo: cambia DESTINO por el correo donde quieres recibir los avisos.
+// DESTINO es el correo donde llegan los avisos; REMITENTE debe ser una cuenta existente de tu dominio.
 declare(strict_types=1);
 
-const DESTINO = 'CAMBIA-ESTE-CORREO@ejemplo.com';     // dónde llegan los avisos
-const REMITENTE = 'avisos@andamiosrosas.com';         // debe ser una cuenta de tu propio dominio
+const DESTINO = 'ventas@andamiosrosas.com';           // dónde llegan los avisos
+const REMITENTE = 'ventas@andamiosrosas.com';         // debe ser una cuenta de tu propio dominio
 const DOMINIO = 'andamiosrosas.com';                  // solo se aceptan envíos desde este sitio
 const MAX_POR_VENTANA = 5;                            // envíos permitidos por IP...
 const VENTANA_SEGUNDOS = 600;                         // ...cada 10 minutos
