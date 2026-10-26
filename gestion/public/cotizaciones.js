@@ -81,7 +81,8 @@ async function abrirCotizacion(id) {
         : `<tr><td><label style="display:flex;gap:8px;align-items:center;margin:0;color:inherit;font-size:inherit;font-weight:400"><input type="checkbox" id="chkIvaCot" class="chk" ${c.iva_pct > 0 ? 'checked' : ''}> Con IVA (16%) <span class="muted">· quítalo si paga en efectivo sin IVA</span></label></td><td class="r money">${mxn(c.iva)}</td></tr>`}
       <tr><td><b>Total</b></td><td class="r money">${mxn(c.total)}</td></tr></table>
     ${c.notas ? `<p class="muted" style="margin-top:10px">${esc(c.notas)}</p>` : ''}
-    ${c.renta_id ? '' : `<label>Estatus</label><select id="estCot">${['Pendiente', 'Contratada', 'No contratada'].map(e => `<option ${c.estatus === e ? 'selected' : ''}>${e}</option>`).join('')}</select>`}
+    <label>Estatus</label><select id="estCot">${['Pendiente', 'Contratada', 'No contratada'].map(e => `<option ${c.estatus === e ? 'selected' : ''}>${e}</option>`).join('')}</select>
+    ${c.renta_id ? '<p class="muted" style="margin:4px 0 0">¿El cliente ya no la quiere? Cámbiala a <b>Pendiente</b> o <b>No contratada</b>: la renta apartada se cancela y el equipo queda libre.</p>' : ''}
     ${c.renta_id ? '<div class="actions"><button class="btn primary" id="verRenta">Ver la renta creada</button></div>' : `
     <h3>Convertir en renta</h3>
     <form id="fConv" class="f2"><div><label>Fecha de inicio</label><input name="fecha_inicio" type="date" value="${c.fecha_traslado || hoyStr()}" required></div>
@@ -100,7 +101,15 @@ async function abrirCotizacion(id) {
   const chkIva = $('#chkIvaCot', dlg);
   if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); abrirCotizacion(id); refrescar(); });
   const est = $('#estCot', dlg);
-  if (est) est.onchange = () => act(async () => { await api('PATCH', `/api/cotizaciones/${id}`, { estatus: est.value }); toast('Estatus actualizado'); abrirCotizacion(id); refrescar(); });
+  if (est) est.onchange = () => act(async () => {
+    if (c.renta_id && est.value !== 'Contratada'
+      && !confirm(`¿El cliente ya no la quiere? Se cancelará la renta apartada y las piezas quedarán libres. La cotización pasará a "${est.value}". Si la renta ya tiene pagos registrados, quedarán en la renta cancelada y no contarán en los reportes.`)) {
+      est.value = c.estatus; return;
+    }
+    await api('PATCH', `/api/cotizaciones/${id}`, { estatus: est.value });
+    toast(c.renta_id && est.value !== 'Contratada' ? 'Renta cancelada y cotización actualizada' : 'Estatus actualizado');
+    abrirCotizacion(id); refrescar();
+  });
   const ver = $('#verRenta', dlg);
   if (ver) ver.onclick = () => abrirRenta(c.renta_id);
   const borrar = $('#borrarCot', dlg);

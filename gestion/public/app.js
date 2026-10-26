@@ -203,7 +203,7 @@ async function abrirRenta(id) {
   const accion = (sel, fn) => { const el = $(sel, dlg); if (el) el.onclick = () => act(async () => { await fn(); reabrir(); }); };
   accion('#entregar', () => api('POST', `/api/rentas/${id}/entregar`, {}));
   accion('#devolver', () => api('POST', `/api/rentas/${id}/devolver`, {}));
-  accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres.')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
+  accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres. Si viene de una cotización, esta pasará a "No contratada".')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
   accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación', forma: $('#fPago', dlg).elements.forma.value }));
   $('#copiarMsgRenta', dlg).onclick = () => copiarTexto(msg);
   const chkIva = $('#chkIva', dlg);

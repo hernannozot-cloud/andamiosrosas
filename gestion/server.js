@@ -725,7 +725,11 @@ route('POST', /^\/api\/rentas\/(\d+)\/cancelar$/, (ctx, id) => {
   const r = get('SELECT * FROM rentas WHERE id = ?', id);
   if (!r) throw new HttpError(404, 'Renta no encontrada');
   if (r.estado === 'devuelta') throw bad('No se puede cancelar una renta ya devuelta');
-  run("UPDATE rentas SET estado = 'cancelada' WHERE id = ?", id);
+  tx(() => {
+    run("UPDATE rentas SET estado = 'cancelada' WHERE id = ?", id);
+    // Si venía de una cotización, esta deja de estar contratada (el cliente ya no la quiso) y se puede volver a abrir.
+    run("UPDATE cotizaciones SET estatus = 'No contratada', renta_id = NULL, cerrada_auto = NULL WHERE renta_id = ?", id);
+  });
   return rentaPorId(id);
 });
 route('POST', /^\/api\/rentas\/(\d+)\/pagos$/, (ctx, id) => {
@@ -830,6 +834,21 @@ route('PATCH', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   const b = ctx.body;
   if (b.estatus !== undefined && !ESTATUS_COT.includes(b.estatus)) throw bad('Estatus inválido');
   const estatus = b.estatus ?? c.estatus;
+  // Si el cliente se echa para atrás después de contratar: la cotización vuelve a Pendiente o pasa a No contratada y la renta
+  // apartada se cancela (las piezas quedan libres). Una renta ya entregada o devuelta no se puede deshacer desde aquí.
+  if (c.renta_id && estatus !== 'Contratada') {
+    const ren = get('SELECT estado FROM rentas WHERE id = ?', c.renta_id);
+    if (ren?.estado === 'activa') throw bad('El equipo ya se entregó: registra la devolución desde la renta (o cancélala allí si no se usó)');
+    if (ren?.estado === 'devuelta') throw bad('La renta ya se realizó y no se puede deshacer');
+    tx(() => {
+      if (ren?.estado === 'apartada') {
+        run("UPDATE rentas SET estado = 'cancelada', notas = COALESCE(notas || ' · ', '') || ? WHERE id = ?",
+          `Cancelada el ${hoy()}: la cotización ${c.folio} pasó a ${estatus}`, c.renta_id);
+      }
+      run('UPDATE cotizaciones SET renta_id = NULL WHERE id = ?', id);
+    });
+    c.renta_id = null;
+  }
   // Al reabrir una cotización (volver a Pendiente) empieza de nuevo su vigencia de N días.
   const reabierta = estatus === 'Pendiente' && c.estatus !== 'Pendiente';
   // IVA: se puede activar o quitar mientras la cotización no se haya convertido en renta (el cliente decide cómo paga).
