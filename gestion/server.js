@@ -27,13 +27,22 @@ if (!config.pin || !config.secret) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   primeraVez = true;
 }
+// En el servidor (Railway) el PIN y la clave de sesiones pueden venir de variables de entorno;
+// tienen prioridad sobre config.json y nunca se escriben en disco.
+const PIN_ENV = (process.env.GESTION_PIN || '').trim();
+if (PIN_ENV) config.pin = PIN_ENV;
+if (process.env.GESTION_SECRET) config.secret = process.env.GESTION_SECRET;
 const PORT = Number(process.env.PORT) || config.port;
+// Detrás del proxy HTTPS de Railway: la IP real y el protocolo vienen en encabezados del proxy.
+const TRUST_PROXY = process.env.GESTION_TRUST_PROXY === '1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FOTOS_DIR = path.join(__dirname, '..', 'sitio-web', 'assets', 'productos');
-const BACKUP_DIRS = [path.join(DATA_DIR, 'respaldos'), path.join(__dirname, 'respaldos')];
+const DB_PATH = path.join(DATA_DIR, 'gestion.db');
+// Con GESTION_DATA_DIR (servidor) solo se respalda dentro de esa carpeta; en la PC también en gestion/respaldos (OneDrive).
+const BACKUP_DIRS = [path.join(DATA_DIR, 'respaldos'), ...(process.env.GESTION_DATA_DIR ? [] : [path.join(__dirname, 'respaldos')])];
 
 // ---------- Base de datos ----------
-const db = new DatabaseSync(path.join(DATA_DIR, 'gestion.db'));
+const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 db.exec(`
 CREATE TABLE IF NOT EXISTS activos (
@@ -574,27 +583,102 @@ function sesionValida(req) {
   const esperado = firma(exp);
   return sig.length === esperado.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(esperado));
 }
+// Límite de intentos: 5 fallos seguidos por IP bloquean esa IP 1 minuto (y cada fallo extra lo renueva);
+// además, 30 fallos en total en 15 minutos (de cualquier IP) bloquean el acceso con PIN 15 minutos.
+// Las sesiones ya abiertas siguen funcionando durante el bloqueo.
 const intentos = new Map(); // ip -> {n, hasta}
+let fallosGlobales = [];
+let bloqueoGlobalHasta = 0;
 function pinCorrecto(ip, pin) {
+  const ahora = Date.now();
+  if (ahora < bloqueoGlobalHasta) throw new HttpError(429, 'Demasiados intentos fallidos. Espera 15 minutos.');
   const reg = intentos.get(ip) || { n: 0, hasta: 0 };
-  if (reg.n >= 5 && Date.now() < reg.hasta) throw new HttpError(429, 'Demasiados intentos. Espera un minuto.');
+  if (reg.n >= 5 && ahora < reg.hasta) throw new HttpError(429, 'Demasiados intentos. Espera un minuto.');
   const a = Buffer.from(String(pin || '')), b = Buffer.from(config.pin);
   const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
-  if (ok) intentos.delete(ip); else intentos.set(ip, { n: reg.n + 1, hasta: Date.now() + 60000 });
-  return ok;
+  if (ok) { intentos.delete(ip); return true; }
+  intentos.set(ip, { n: reg.n + 1, hasta: ahora + 60000 });
+  fallosGlobales = fallosGlobales.filter(t => t > ahora - 15 * 60000);
+  fallosGlobales.push(ahora);
+  if (fallosGlobales.length >= 30) { bloqueoGlobalHasta = ahora + 15 * 60000; fallosGlobales = []; console.warn('Acceso con PIN bloqueado 15 min por exceso de intentos fallidos.'); }
+  if (intentos.size > 10000) intentos.clear(); // evita crecer sin límite
+  return false;
 }
+function ipCliente(req) {
+  if (TRUST_PROXY) {
+    const real = req.headers['x-real-ip'];
+    if (real) return String(real).trim();
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (xff.length) return xff[xff.length - 1];
+  }
+  return req.socket.remoteAddress;
+}
+const esHttps = req => TRUST_PROXY && String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https';
+const cookieSesion = (req, valor, maxAge) => `ar_sid=${valor}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${esHttps(req) ? '; Secure' : ''}`;
 
 // ---------- Rutas API ----------
 const ESTADOS_ACTIVO = ['Disponible', 'Mantenimiento', 'Baja'];
 const routes = [];
-const route = (method, re, fn, publica = false) => routes.push({ method, re, fn, publica });
+const route = (method, re, fn, publica = false, opciones = {}) => routes.push({ method, re, fn, publica, ...opciones });
 
 route('POST', /^\/api\/login$/, (ctx) => {
   if (!pinCorrecto(ctx.ip, ctx.body.pin)) throw new HttpError(401, 'PIN incorrecto');
-  ctx.setCookie = `ar_sid=${nuevaSesion()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 86400}`;
+  ctx.setCookie = cookieSesion(ctx.req, nuevaSesion(), 30 * 86400);
   return { ok: true };
 }, true);
-route('POST', /^\/api\/logout$/, (ctx) => { ctx.setCookie = 'ar_sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'; return { ok: true }; }, true);
+route('POST', /^\/api\/logout$/, (ctx) => { ctx.setCookie = cookieSesion(ctx.req, '', 0); return { ok: true }; }, true);
+
+// ---------- Respaldo y restauración de la base completa ----------
+// Descargar: copia consistente en un solo archivo (VACUUM INTO junta la base y su -wal).
+route('GET', /^\/api\/respaldo$/, () => {
+  const tmp = path.join(os.tmpdir(), `gestion-descarga-${crypto.randomBytes(6).toString('hex')}.db`);
+  try {
+    db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
+    const buf = fs.readFileSync(tmp);
+    return { raw: buf, headers: { 'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="gestion-${hoy()}.db"` } };
+  } finally { fs.rm(tmp, { force: true }, () => {}); }
+});
+// Restaurar: reemplaza TODA la base por el archivo subido (p. ej. la base de la PC al pasarse a Railway).
+// Requiere sesión y volver a escribir el PIN. Antes guarda la base actual en respaldos/. Después el servidor
+// se reinicia solo (Railway lo vuelve a levantar); en la PC hay que volver a abrir iniciar-gestion.bat.
+route('POST', /^\/api\/restaurar$/, (ctx) => {
+  if (!pinCorrecto(ctx.ip, ctx.req.headers['x-pin'])) throw new HttpError(401, 'PIN incorrecto');
+  const buf = ctx.body;
+  if (!Buffer.isBuffer(buf) || buf.length < 512 || buf.subarray(0, 16).toString('latin1') !== 'SQLite format 3\0') {
+    throw bad('El archivo no es una base de datos del sistema (.db).');
+  }
+  const tmp = path.join(DATA_DIR, 'restaurar-pendiente.db');
+  fs.writeFileSync(tmp, buf);
+  try {
+    const prueba = new DatabaseSync(tmp, { readOnly: true });
+    try {
+      const integridad = prueba.prepare('PRAGMA integrity_check').get();
+      if (Object.values(integridad)[0] !== 'ok') throw bad('El archivo está dañado.');
+      const tablas = prueba.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(t => t.name);
+      if (!['activos', 'rentas', 'clientes', 'cotizaciones'].every(t => tablas.includes(t))) throw bad('El archivo no es una base del sistema de gestión.');
+      ctx.resumenRestaurado = {
+        activos: prueba.prepare('SELECT COUNT(*) n FROM activos').get().n,
+        rentas: prueba.prepare('SELECT COUNT(*) n FROM rentas').get().n,
+        cotizaciones: prueba.prepare('SELECT COUNT(*) n FROM cotizaciones').get().n,
+      };
+    } finally { prueba.close(); }
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    if (e instanceof HttpError) throw e;
+    throw bad('No se pudo leer el archivo como base de datos.');
+  }
+  const dirResp = path.join(DATA_DIR, 'respaldos');
+  fs.mkdirSync(dirResp, { recursive: true });
+  const sello = new Date().toISOString().replace(/[:.]/g, '-');
+  db.exec(`VACUUM INTO '${path.join(dirResp, `antes-de-restaurar-${sello}.db`).replace(/'/g, "''")}'`);
+  db.close();
+  for (const ext of ['-wal', '-shm']) fs.rmSync(DB_PATH + ext, { force: true });
+  fs.renameSync(tmp, DB_PATH);
+  console.log('Base restaurada desde un archivo subido. Reiniciando...');
+  setTimeout(() => process.exit(0), 300);
+  return { ok: true, ...ctx.resumenRestaurado };
+}, false, { binario: true });
 route('GET', /^\/api\/me$/, (ctx) => ({ ok: sesionValida(ctx.req) }), true);
 
 route('GET', /^\/api\/resumen$/, () => resumen());
@@ -914,27 +998,35 @@ function sendFile(res, file) {
     res.end(buf);
   });
 }
-function readBody(req) {
+function readBody(req, binario = false) {
+  const limite = binario ? 200e6 : 1e6; // la base completa puede pesar varios MB
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
-    req.on('data', c => { size += c.length; if (size > 1e6) { reject(new HttpError(413, 'Solicitud muy grande')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(bad('JSON inválido')); } });
+    req.on('data', c => { size += c.length; if (size > limite) { reject(new HttpError(413, 'Solicitud muy grande')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => {
+      if (binario) return resolve(Buffer.concat(chunks));
+      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(bad('JSON inválido')); }
+    });
     req.on('error', reject);
   });
 }
 
 const server = http.createServer(async (req, res) => {
   try {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    if (esHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     const url = new URL(req.url, 'http://x');
     const p = decodeURIComponent(url.pathname);
     if (p.startsWith('/api/')) {
-      const ctx = { req, ip: req.socket.remoteAddress, query: url.searchParams, body: {}, setCookie: null };
+      const ctx = { req, ip: ipCliente(req), query: url.searchParams, body: {}, setCookie: null };
       for (const r of routes) {
         if (r.method !== req.method) continue;
         const m = r.re.exec(p);
         if (!m) continue;
         if (!r.publica && !sesionValida(req)) throw new HttpError(401, 'Sesión requerida');
-        if (req.method !== 'GET' && req.method !== 'DELETE') ctx.body = await readBody(req);
+        if (req.method !== 'GET' && req.method !== 'DELETE') ctx.body = await readBody(req, r.binario);
         const out = await r.fn(ctx, ...m.slice(1).map(Number).map((n, i) => (isNaN(n) ? m[i + 1] : n)));
         if (out && out.raw) { // respuesta binaria/HTML (PDF de cotización)
           res.writeHead(200, { 'Cache-Control': 'no-store', ...out.headers });
@@ -951,7 +1043,7 @@ const server = http.createServer(async (req, res) => {
     }
     const rel = p === '/' ? 'index.html' : p.replace(/^\/+/, '');
     const file = path.join(PUBLIC_DIR, rel);
-    if (!file.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end(); }
+    if (!file.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(403); return res.end(); } // solo archivos de public/
     return sendFile(res, file);
   } catch (e) {
     if (!(e instanceof HttpError)) console.error(e);
@@ -993,6 +1085,7 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('\n=== Gestión Andamios Rosas ===');
   console.log(`En esta computadora:  http://localhost:${PORT}`);
   ips.forEach(ip => console.log(`En tu celular (misma Wi-Fi):  http://${ip}:${PORT}`));
-  console.log(primeraVez ? `\nPIN de acceso (guárdalo): ${config.pin}` : `\nPIN de acceso: está en ${CONFIG_PATH}`);
+  console.log(PIN_ENV ? '\nPIN de acceso: el de la variable GESTION_PIN'
+    : primeraVez ? `\nPIN de acceso (guárdalo): ${config.pin}` : `\nPIN de acceso: está en ${CONFIG_PATH}`);
   console.log('Para cerrar el sistema: Ctrl+C\n');
 });

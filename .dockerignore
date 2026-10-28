@@ -1,0 +1,10 @@
+# La imagen solo necesita gestion/ y partes de sitio-web/ (ver Dockerfile).
+*
+!Dockerfile
+!gestion/
+!sitio-web/logic.js
+!sitio-web/assets/
+gestion/respaldos/
+gestion/node_modules/
+**/*.db
+**/*.db-*

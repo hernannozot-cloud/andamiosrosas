@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#ef1e78">
+<title>Respaldo · Andamios Rosas</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="app.css?v=9">
+<style>
+  .resp { max-width: 640px; margin: 24px auto; padding: 0 16px; }
+  .resp section { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .resp h1 { font-size: 1.3rem; } .resp h2 { font-size: 1.05rem; margin-top: 0; }
+  .resp input { display: block; margin: 8px 0 12px; }
+  .resp .aviso { background: #fff4e5; border: 1px solid #f0b46b; border-radius: 8px; padding: 10px; }
+  .resp #msg { font-weight: 600; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="resp">
+  <p><a href="/">← Volver al sistema</a></p>
+  <h1>Respaldo de la base de datos</h1>
+  <p id="sinSesion" class="aviso" hidden>Primero entra al sistema con tu PIN y luego vuelve a esta página.</p>
+
+  <section>
+    <h2>Descargar una copia</h2>
+    <p>Baja un solo archivo <b>.db</b> con toda la información (inventario, rentas, clientes, cotizaciones). Guárdalo en tu computadora como respaldo.</p>
+    <a class="btn primary" href="/api/respaldo">Descargar copia</a>
+  </section>
+
+  <section>
+    <h2>Restaurar desde un archivo</h2>
+    <p class="aviso"><b>Cuidado:</b> esto <b>reemplaza toda la información</b> de este sistema por la del archivo. Antes se guarda automáticamente una copia de lo que hay ahora.</p>
+    <form id="form">
+      <label>Archivo .db <input id="archivo" type="file" accept=".db" required></label>
+      <label>Escribe tu PIN para confirmar <input id="pin" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Restaurar</button>
+    </form>
+    <p id="msg"></p>
+  </section>
+</div>
+<script>
+fetch('/api/me').then(r => r.json()).then(d => { if (!d.ok) document.getElementById('sinSesion').hidden = false; });
+const msg = document.getElementById('msg');
+document.getElementById('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = document.getElementById('archivo').files[0];
+  if (!f) return;
+  if (!confirm(`¿Seguro? Se reemplazará TODA la información por la del archivo "${f.name}".`)) return;
+  msg.textContent = 'Subiendo...';
+  try {
+    const r = await fetch('/api/restaurar', { method: 'POST', body: f,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Pin': document.getElementById('pin').value } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+    msg.textContent = `Listo: se cargaron ${d.activos} activos, ${d.rentas} rentas y ${d.cotizaciones} cotizaciones. El sistema se está reiniciando; espera unos segundos...`;
+    setTimeout(() => { location.href = '/'; }, 8000);
+  } catch (err) { msg.textContent = err.message; }
+});
+</script>
+</body>
+</html>

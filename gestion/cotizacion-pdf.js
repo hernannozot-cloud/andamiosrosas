@@ -8,12 +8,15 @@ const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+// GESTION_CHROME indica la ruta del navegador si no está en un lugar conocido (en Railway: Chromium de Linux).
 const NAVEGADORES = [
+  process.env.GESTION_CHROME,
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-];
+  '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
+].filter(Boolean);
 const LOGO = path.join(__dirname, '..', 'sitio-web', 'assets', 'logo.png');
 const WHATSAPP = '55 3948 1162';
 
@@ -57,7 +60,7 @@ function htmlCotizacion(c) {
 @page { size: A4; margin: 0; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
-body { font-family: Calibri, "Segoe UI", Arial, sans-serif; color: #111; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: Calibri, Carlito, "Segoe UI", Arial, sans-serif; color: #111; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .page { width: 210mm; height: 296mm; padding: 14mm 12mm; }
 .box { border: 1.2px solid #222; min-height: 150mm; }
 .head { display: flex; justify-content: space-between; align-items: flex-end; padding: 10px 14px 6px; }
@@ -122,13 +125,16 @@ let cola = Promise.resolve();
 function generarPdf(html) {
   const job = cola.then(() => new Promise((resolve, reject) => {
     const exe = NAVEGADORES.find(p => fs.existsSync(p));
-    if (!exe) return reject(new Error('No se encontró Edge ni Chrome para generar el PDF'));
+    if (!exe) return reject(new Error('No se encontró Edge, Chrome ni Chromium para generar el PDF'));
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gestion-pdf-'));
     const htmlPath = path.join(dir, 'cotizacion.html');
     const pdfPath = path.join(dir, 'cotizacion.pdf');
     fs.writeFileSync(htmlPath, html, 'utf8');
     const args = ['--headless', '--disable-gpu', '--no-first-run', '--disable-extensions', '--no-pdf-header-footer',
-      `--user-data-dir=${path.join(dir, 'perfil')}`, `--print-to-pdf=${pdfPath}`, pathToFileURL(htmlPath).href];
+      `--user-data-dir=${path.join(dir, 'perfil')}`, `--print-to-pdf=${pdfPath}`];
+    // En Linux (contenedor de Railway) Chromium corre como root y con poca memoria compartida.
+    if (process.platform === 'linux') args.push('--no-sandbox', '--disable-dev-shm-usage');
+    args.push(pathToFileURL(htmlPath).href);
     // El lanzador de Edge puede terminar de inmediato y dejar que otro proceso escriba el PDF unos segundos
     // después, así que no basta con esperar a que termine el comando: hay que esperar a que exista el archivo.
     execFile(exe, args, { timeout: 45000, windowsHide: true }, err => {
