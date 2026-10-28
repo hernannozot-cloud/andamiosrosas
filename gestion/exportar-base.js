@@ -1,7 +1,7 @@
 'use strict';
-// Junta la base de la PC (gestion.db + gestion.db-wal) en UN solo archivo para subirlo a Railway.
+// Junta la base de la PC (gestion.db + gestion.db-wal) en UN solo archivo para subirlo a Render.
 // No toca la base original: primero la copia a una carpeta temporal y trabaja sobre la copia.
-// Uso: node exportar-base.js   (o doble clic en preparar-base-para-railway.bat)
+// Uso: node exportar-base.js   (o doble clic en preparar-base-para-la-nube.bat)
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -12,7 +12,7 @@ const origen = path.join(DATA_DIR, 'gestion.db');
 if (!fs.existsSync(origen)) { console.error(`No se encontró la base en ${origen}`); process.exit(1); }
 
 const hoy = new Date().toLocaleDateString('en-CA');
-const destino = path.resolve(process.argv[2] || path.join(__dirname, `base-para-railway-${hoy}.db`));
+const destino = path.resolve(process.argv[2] || path.join(__dirname, `base-para-la-nube-${hoy}.db`));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gestion-export-'));
 try {
   for (const ext of ['', '-wal']) {

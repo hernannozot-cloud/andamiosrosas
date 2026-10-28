@@ -1,0 +1,26 @@
+# Render Blueprint: sistema de gestión de Andamios Rosas (ver gestion/GUIA-RENDER.md).
+# Crea el servicio web con su disco en /data. Al crearlo, Render pide el valor de GESTION_PIN.
+services:
+  - type: web
+    name: gestion-andamios-rosas
+    runtime: docker
+    plan: starter            # el plan gratis no permite disco; sin disco se perdería la información
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/me
+    numInstances: 1          # SQLite: una sola instancia
+    buildFilter:
+      paths:
+        - gestion/**
+        - sitio-web/logic.js
+        - sitio-web/assets/**
+        - Dockerfile
+        - render.yaml
+    disk:
+      name: datos
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: GESTION_PIN
+        sync: false

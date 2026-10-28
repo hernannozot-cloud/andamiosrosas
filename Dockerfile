@@ -1,4 +1,4 @@
-# Sistema de gestión de Andamios Rosas para Railway.
+# Sistema de gestión de Andamios Rosas para Render.
 # Solo incluye gestion/ y lo que usa de sitio-web/ (logic.js, logo y fotos de productos).
 FROM node:24-bookworm-slim
 

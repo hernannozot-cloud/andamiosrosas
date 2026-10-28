@@ -27,13 +27,13 @@ if (!config.pin || !config.secret) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   primeraVez = true;
 }
-// En el servidor (Railway) el PIN y la clave de sesiones pueden venir de variables de entorno;
+// En el servidor (Render) el PIN y la clave de sesiones pueden venir de variables de entorno;
 // tienen prioridad sobre config.json y nunca se escriben en disco.
 const PIN_ENV = (process.env.GESTION_PIN || '').trim();
 if (PIN_ENV) config.pin = PIN_ENV;
 if (process.env.GESTION_SECRET) config.secret = process.env.GESTION_SECRET;
 const PORT = Number(process.env.PORT) || config.port;
-// Detrás del proxy HTTPS de Railway: la IP real y el protocolo vienen en encabezados del proxy.
+// Detrás del proxy HTTPS de Render: la IP real y el protocolo vienen en encabezados del proxy.
 const TRUST_PROXY = process.env.GESTION_TRUST_PROXY === '1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const FOTOS_DIR = path.join(__dirname, '..', 'sitio-web', 'assets', 'productos');
@@ -639,9 +639,9 @@ route('GET', /^\/api\/respaldo$/, () => {
       'Content-Disposition': `attachment; filename="gestion-${hoy()}.db"` } };
   } finally { fs.rm(tmp, { force: true }, () => {}); }
 });
-// Restaurar: reemplaza TODA la base por el archivo subido (p. ej. la base de la PC al pasarse a Railway).
+// Restaurar: reemplaza TODA la base por el archivo subido (p. ej. la base de la PC al pasarse a Render).
 // Requiere sesión y volver a escribir el PIN. Antes guarda la base actual en respaldos/. Después el servidor
-// se reinicia solo (Railway lo vuelve a levantar); en la PC hay que volver a abrir iniciar-gestion.bat.
+// se reinicia solo (Render lo vuelve a levantar); en la PC hay que volver a abrir iniciar-gestion.bat.
 route('POST', /^\/api\/restaurar$/, (ctx) => {
   if (!pinCorrecto(ctx.ip, ctx.req.headers['x-pin'])) throw new HttpError(401, 'PIN incorrecto');
   const buf = ctx.body;
@@ -676,7 +676,7 @@ route('POST', /^\/api\/restaurar$/, (ctx) => {
   for (const ext of ['-wal', '-shm']) fs.rmSync(DB_PATH + ext, { force: true });
   fs.renameSync(tmp, DB_PATH);
   console.log('Base restaurada desde un archivo subido. Reiniciando...');
-  setTimeout(() => process.exit(0), 300);
+  setTimeout(() => process.exit(1), 300); // código 1: Render reinicia el servicio
   return { ok: true, ...ctx.resumenRestaurado };
 }, false, { binario: true });
 route('GET', /^\/api\/me$/, (ctx) => ({ ok: sesionValida(ctx.req) }), true);

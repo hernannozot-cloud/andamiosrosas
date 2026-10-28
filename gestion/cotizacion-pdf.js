@@ -8,7 +8,7 @@ const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-// GESTION_CHROME indica la ruta del navegador si no está en un lugar conocido (en Railway: Chromium de Linux).
+// GESTION_CHROME indica la ruta del navegador si no está en un lugar conocido (en Render: Chromium de Linux).
 const NAVEGADORES = [
   process.env.GESTION_CHROME,
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -132,7 +132,7 @@ function generarPdf(html) {
     fs.writeFileSync(htmlPath, html, 'utf8');
     const args = ['--headless', '--disable-gpu', '--no-first-run', '--disable-extensions', '--no-pdf-header-footer',
       `--user-data-dir=${path.join(dir, 'perfil')}`, `--print-to-pdf=${pdfPath}`];
-    // En Linux (contenedor de Railway) Chromium corre como root y con poca memoria compartida.
+    // En Linux (contenedor de Render) Chromium corre como root y con poca memoria compartida.
     if (process.platform === 'linux') args.push('--no-sandbox', '--disable-dev-shm-usage');
     args.push(pathToFileURL(htmlPath).href);
     // El lanzador de Edge puede terminar de inmediato y dejar que otro proceso escriba el PDF unos segundos
