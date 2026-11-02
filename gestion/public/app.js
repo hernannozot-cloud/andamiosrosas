@@ -195,6 +195,7 @@ async function abrirRenta(id) {
     <div class="actions">
       ${r.estado === 'apartada' ? '<button class="btn primary" id="entregar">Marcar entregada</button>' : ''}
       ${r.estado === 'activa' ? '<button class="btn primary" id="devolver">Registrar devolución</button>' : ''}
+      ${r.estado === 'activa' ? '<button class="btn" type="button" id="extender">➕ Extender renta</button>' : ''}
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : ''}
       <button class="btn" type="button" id="copiarMsgRenta">Copiar mensaje</button>
       ${r.estado === 'apartada' || r.estado === 'activa' ? '<button class="btn danger" id="cancelar">Cancelar renta</button>' : ''}
@@ -203,6 +204,8 @@ async function abrirRenta(id) {
   const accion = (sel, fn) => { const el = $(sel, dlg); if (el) el.onclick = () => act(async () => { await fn(); reabrir(); }); };
   accion('#entregar', () => api('POST', `/api/rentas/${id}/entregar`, {}));
   accion('#devolver', () => api('POST', `/api/rentas/${id}/devolver`, {}));
+  const btnExtender = $('#extender', dlg);
+  if (btnExtender) btnExtender.onclick = () => extenderRenta(r);
   accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres. Si viene de una cotización, esta pasará a "No contratada".')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
   accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación', forma: $('#fPago', dlg).elements.forma.value }));
   $('#copiarMsgRenta', dlg).onclick = () => copiarTexto(msg);
@@ -230,6 +233,66 @@ async function abrirRenta(id) {
       toast('Equipo entregado guardado'); reabrir();
     });
   }
+}
+
+// Extender una renta ya entregada: el cliente pide más días. Muestra cómo queda el total antes de guardar.
+function extenderRenta(r) {
+  const andamios = r.grupos.filter(g => g.categoria === 'andamio');
+  const nAnd = andamios.reduce((s, g) => s + g.cantidad, 0);
+  const precioActual = andamios.length ? andamios[0].precio_dia : 0;
+  const sumaDiasF = (f, n) => { const d = new Date(`${f}T00:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
+  abrirDlg(`${dlgHead(`Extender ${esc(r.folio)}`)}
+    <p class="muted">${esc(r.cliente_nombre)} · termina el ${fecha(r.fecha_fin)} (${r.dias} día${r.dias > 1 ? 's' : ''}) · total actual ${mxn(r.total)}</p>
+    <form id="fExt">
+      <label>Días adicionales</label><input name="dias_extra" type="number" min="1" max="365" value="1" required>
+      <p class="muted" id="extFin" style="margin:4px 0 0"></p>
+      <h3>Precio</h3>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="radio" name="modo" value="mismo" class="chk" checked> Mismo precio por día <span class="muted">(${mxn(precioActual)} por andamio)</span></label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="radio" name="modo" value="tabulador" class="chk"> Tabulador para el total de días <span class="muted" id="pTab"></span></label>
+      <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input type="radio" name="modo" value="manual" class="chk"> Otro precio por andamio por día
+        <input name="precio_andamio_dia" type="number" step="0.01" min="0" style="width:110px" placeholder="$"></label>
+      <div class="total"><div class="muted">TOTAL DE LA RENTA</div><div class="n" id="extTotal">$0</div><div class="muted" id="extDet"></div></div>
+      <p class="error" id="extErr"></p>
+      <div class="actions"><button class="btn primary" type="submit" id="extOk">Extender renta</button><button class="btn" type="button" id="extVolver">Volver</button></div>
+    </form>`);
+  const form = $('#fExt', dlg);
+  const val = n => form.elements[n].value;
+  const modo = () => form.querySelector('input[name="modo"]:checked').value;
+  function calc() {
+    const extra = Math.max(1, parseInt(val('dias_extra'), 10) || 1), nuevos = r.dias + extra;
+    const pTab = AR.precioAndamioPorDia(nuevos, nAnd || 1);
+    $('#pTab', dlg).textContent = `(${mxn(pTab)} por andamio por día, ${nuevos} días)`;
+    const m = modo(); let pAnd = precioActual;
+    if (m === 'tabulador') pAnd = pTab;
+    if (m === 'manual') pAnd = Number(val('precio_andamio_dia')) || 0;
+    const otros = r.grupos.filter(g => g.categoria !== 'andamio').reduce((s, g) => s + g.cantidad * g.precio_dia, 0);
+    const sub = (nAnd * pAnd + otros) * nuevos;
+    const iva = Math.round((sub + r.extra) * (r.iva_pct || 0)) / 100;
+    const total = sub + r.extra + iva;
+    $('#extFin').textContent = `Nueva fecha de fin: ${fecha(sumaDiasF(r.fecha_inicio, nuevos))} (${nuevos} días en total)`;
+    $('#extTotal').textContent = mxn(total);
+    $('#extDet').textContent = `${total >= r.total ? '+' : ''}${mxn(total - r.total)} sobre lo actual · saldo después: ${mxn(total - r.pagado)}`;
+    // Con un precio que dejaría el total por debajo de lo que ya se cobraba, no se permite guardar.
+    const baja = total < r.total;
+    $('#extOk').disabled = baja;
+    $('#extErr').textContent = baja ? 'Con ese precio el total bajaría. Usa el mismo precio por día o uno más alto.' : '';
+  }
+  form.oninput = form.onchange = calc;
+  calc();
+  $('#extVolver', dlg).onclick = () => abrirRenta(r.id);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const body = { dias_extra: Number(val('dias_extra')), modo: modo(), precio_andamio_dia: val('precio_andamio_dia'), forzar: !!form.dataset.forzar };
+    try {
+      await api('POST', `/api/rentas/${r.id}/extender`, body);
+      toast('Renta extendida'); abrirRenta(r.id); refrescar();
+    } catch (err) {
+      $('#extErr').textContent = err.message;
+      if (/^Conflicto/.test(err.message)) { // otra renta necesita las piezas: se puede extender de todos modos
+        form.dataset.forzar = '1'; $('#extOk').textContent = 'Extender de todos modos';
+      }
+    }
+  };
 }
 
 async function nuevaRenta() {

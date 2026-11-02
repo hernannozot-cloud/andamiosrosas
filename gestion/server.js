@@ -816,6 +816,52 @@ route('POST', /^\/api\/rentas\/(\d+)\/cancelar$/, (ctx, id) => {
   });
   return rentaPorId(id);
 });
+// Extender una renta ya entregada (activa) que el cliente necesita por más días: suma días y ajusta el precio a pagar.
+// modo: "mismo" (el mismo precio por día), "tabulador" (precio del tabulador para el nuevo total de días) o
+// "manual" (un precio por andamio por día que se captura). Los accesorios conservan su precio por día.
+route('POST', /^\/api\/rentas\/(\d+)\/extender$/, (ctx, id) => {
+  const r = get('SELECT * FROM rentas WHERE id = ?', id);
+  if (!r) throw new HttpError(404, 'Renta no encontrada');
+  if (r.estado !== 'activa') throw bad('Solo se puede extender una renta activa (ya entregada y sin devolver)');
+  const b = ctx.body;
+  const extra = Number(b.dias_extra);
+  if (!Number.isInteger(extra) || extra < 1 || extra > 365) throw bad('Días adicionales inválidos');
+  const nuevos = r.dias + extra;
+  if (nuevos > 365) throw bad('La renta no puede pasar de 365 días');
+  const modo = ['mismo', 'tabulador', 'manual'].includes(b.modo) ? b.modo : 'mismo';
+  const piezas = all(`SELECT ra.activo_id, ra.precio_dia, a.categoria FROM renta_activos ra
+    JOIN activos a ON a.id = ra.activo_id WHERE ra.renta_id = ?`, id);
+  const nAndamios = piezas.filter(p => p.categoria === 'andamio').length;
+  let precioAndamio = null;
+  if (modo === 'tabulador') precioAndamio = AR.precioAndamioPorDia(nuevos, nAndamios || 1);
+  if (modo === 'manual') {
+    precioAndamio = Number(b.precio_andamio_dia);
+    if (!(precioAndamio >= 0)) throw bad('Precio por día inválido');
+  }
+  const precioNuevo = p => (precioAndamio !== null && p.categoria === 'andamio' ? precioAndamio : p.precio_dia);
+  const subViejo = piezas.reduce((s, p) => s + p.precio_dia, 0) * r.dias;
+  const subNuevo = piezas.reduce((s, p) => s + precioNuevo(p), 0) * nuevos;
+  if (subNuevo < subViejo) throw bad('Con ese precio el total bajaría; usa el mismo precio por día o uno más alto');
+  // ¿Otra renta necesita estas piezas en los días extra? (se puede extender de todos modos con "forzar")
+  const finActual = addDays(r.fecha_inicio, r.dias), nuevoFin = addDays(r.fecha_inicio, nuevos), t = hoy();
+  const desde = finActual < t ? t : finActual, diasVentana = diffDays(nuevoFin, desde);
+  if (diasVentana > 0 && !b.forzar) {
+    for (const e of all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ?', id)) {
+      if (disponiblesTipo(e.tipo, desde, diasVentana, id) < e.cantidad) {
+        throw bad(`Conflicto: otra renta necesita "${e.tipo}" entre el ${desde} y el ${nuevoFin}`);
+      }
+    }
+  }
+  tx(() => {
+    run('UPDATE rentas SET dias = ?, notas = COALESCE(notas || \' · \', \'\') || ? WHERE id = ?', nuevos,
+      `Extendida +${extra} d el ${t} (de ${r.dias} a ${nuevos} días, termina el ${nuevoFin}; precio: ${modo})`, id);
+    if (precioAndamio !== null) {
+      run(`UPDATE renta_activos SET precio_dia = ? WHERE renta_id = ? AND activo_id IN
+        (SELECT id FROM activos WHERE categoria = 'andamio')`, precioAndamio, id);
+    }
+  });
+  return rentaPorId(id);
+});
 route('POST', /^\/api\/rentas\/(\d+)\/pagos$/, (ctx, id) => {
   if (!get('SELECT id FROM rentas WHERE id = ?', id)) throw new HttpError(404, 'Renta no encontrada');
   const monto = Number(ctx.body.monto);
