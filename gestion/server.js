@@ -408,31 +408,39 @@ function crearCotizacion(b) {
 
 // Edición completa de una cotización. Conserva folio, estatus y vigencia.
 // Si ya se convirtió en renta, lo que cambie aquí (días, precios, logística, IVA) se aplica también a la renta, para que
-// lo cotizado y lo cobrado cuadren; las piezas no se pueden cambiar porque ya están asignadas a la renta.
+// lo cotizado y lo cobrado cuadren. También se pueden cambiar las cantidades de piezas: la renta toma las nuevas cantidades
+// y el equipo entregado sube o baja lo mismo que cambió lo cotizado (si se ajustó a mano en la renta, ese ajuste se conserva).
 function actualizarCotizacion(id, b) {
   const c = get('SELECT * FROM cotizaciones WHERE id = ?', id);
   if (!c) throw new HttpError(404, 'Cotización no encontrada');
   const d = prepararCotizacion(b);
-  if (c.renta_id) {
-    const antes = new Map(all('SELECT tipo, cantidad FROM cotizacion_items WHERE cotizacion_id = ?', id).map(i => [i.tipo, i.cantidad]));
-    const igual = antes.size === d.lineas.length && d.lineas.every(l => antes.get(l.tipo) === l.cantidad);
-    if (!igual) throw bad('Esta cotización ya es una renta: aquí puedes cambiar días, precios, logística e IVA, pero no las piezas (ajústalas en "Equipo entregado" de la renta)');
-  }
   // Una renta apartada (aún no entregada) sigue la fecha de traslado de su cotización: si la mueves, la renta se mueve con ella,
   // y se revisa que el equipo esté disponible en las nuevas fechas. Una renta ya entregada conserva su fecha de inicio.
-  let nuevoInicio = null;
+  let nuevoInicio = null, ren = null, equipoNuevo = null;
+  const nuevas = new Map(d.lineas.map(l => [l.tipo, l.cantidad]));
   if (c.renta_id) {
-    const ren = get('SELECT estado, fecha_inicio, dias FROM rentas WHERE id = ?', c.renta_id);
+    ren = get('SELECT estado, fecha_inicio, dias FROM rentas WHERE id = ?', c.renta_id);
+    const antes = new Map(all('SELECT tipo, cantidad FROM cotizacion_items WHERE cotizacion_id = ?', id).map(i => [i.tipo, i.cantidad]));
+    equipoNuevo = new Map(all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ?', c.renta_id).map(e => [e.tipo, e.cantidad]));
+    for (const tipo of new Set([...antes.keys(), ...nuevas.keys()])) {
+      const delta = (nuevas.get(tipo) || 0) - (antes.get(tipo) || 0);
+      if (delta) equipoNuevo.set(tipo, Math.max(0, (equipoNuevo.get(tipo) || 0) + delta));
+    }
+    const subio = tipo => (nuevas.get(tipo) || 0) > (antes.get(tipo) || 0);
+    let inicio = ren.fecha_inicio;
     if (ren.estado === 'apartada') {
-      const inicio = d.traslado && d.traslado !== ren.fecha_inicio ? d.traslado : ren.fecha_inicio;
-      if (inicio !== ren.fecha_inicio || d.dias !== ren.dias) {
-        for (const e of all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ?', c.renta_id)) {
-          if (disponiblesTipo(e.tipo, inicio, d.dias, c.renta_id) < e.cantidad) {
-            throw bad(`No hay ${e.cantidad} de "${e.tipo}" disponibles del ${inicio} al ${addDays(inicio, d.dias)}`);
-          }
+      inicio = d.traslado && d.traslado !== ren.fecha_inicio ? d.traslado : ren.fecha_inicio;
+      if (inicio !== ren.fecha_inicio) nuevoInicio = inicio;
+    }
+    // En rentas vigentes se revisa que alcance el equipo: los tipos que suben y, si la renta apartada cambia de fechas, todos.
+    if (ren.estado === 'apartada' || ren.estado === 'activa') {
+      const cambiaFechas = ren.estado === 'apartada' && (inicio !== ren.fecha_inicio || d.dias !== ren.dias);
+      for (const [tipo, n] of equipoNuevo) {
+        if (n > 0 && (cambiaFechas || subio(tipo))) {
+          const hay = disponiblesTipo(tipo, inicio, d.dias, c.renta_id);
+          if (hay < n) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${inicio} al ${addDays(inicio, d.dias)} (necesitas ${n})`);
         }
       }
-      if (inicio !== ren.fecha_inicio) nuevoInicio = inicio;
     }
   }
   tx(() => {
@@ -446,6 +454,28 @@ function actualizarCotizacion(id, b) {
       run('UPDATE rentas SET dias = ?, iva_pct = ?, extra = ?, extra_concepto = ?, direccion = COALESCE(?, direccion), fecha_inicio = COALESCE(?, fecha_inicio) WHERE id = ?',
         d.dias, d.ivaPct > 0 ? d.ivaPct : 0, d.logistico,
         d.logistico > 0 ? (r?.extra_concepto || `Traslado, montaje, desmontaje y recolección (${c.folio})`) : null, d.direccion, nuevoInicio, c.renta_id);
+      // Piezas (códigos) de la renta: tantas por tipo como diga la cotización. Se quitan las sobrantes y se agregan las que falten,
+      // primero las libres en esas fechas (igual que al crear la renta).
+      const inicio = nuevoInicio || ren.fecha_inicio;
+      const asignadas = all(`SELECT ra.activo_id, a.tipo FROM renta_activos ra JOIN activos a ON a.id = ra.activo_id
+        WHERE ra.renta_id = ? ORDER BY a.codigo DESC`, c.renta_id);
+      for (const tipo of new Set([...asignadas.map(x => x.tipo), ...nuevas.keys()])) {
+        const tiene = asignadas.filter(x => x.tipo === tipo).map(x => x.activo_id), quiere = nuevas.get(tipo) || 0;
+        for (const aid of tiene.slice(0, Math.max(0, tiene.length - quiere))) {
+          run('DELETE FROM renta_activos WHERE renta_id = ? AND activo_id = ?', c.renta_id, aid);
+        }
+        if (quiere > tiene.length) {
+          const ya = new Set(tiene), libresT = libres(tipo, inicio, d.dias, c.renta_id).filter(a => !ya.has(a.id));
+          const resto = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo)
+            .filter(a => !ya.has(a.id) && !libresT.some(x => x.id === a.id));
+          const extra = [...libresT, ...resto].slice(0, quiere - tiene.length);
+          if (extra.length < quiere - tiene.length) throw bad(`No hay suficientes piezas de "${tipo}" en el inventario (necesitas ${quiere})`);
+          const precio = d.lineas.find(l => l.tipo === tipo).precio;
+          for (const a of extra) run('INSERT INTO renta_activos (renta_id, activo_id, precio_dia) VALUES (?,?,?)', c.renta_id, a.id, precio);
+        }
+      }
+      run('DELETE FROM renta_equipo WHERE renta_id = ?', c.renta_id);
+      for (const [tipo, n] of equipoNuevo) if (n > 0) run('INSERT INTO renta_equipo (renta_id, tipo, cantidad) VALUES (?,?,?)', c.renta_id, tipo, n);
       for (const l of d.lineas) {
         run('UPDATE renta_activos SET precio_dia = ? WHERE renta_id = ? AND activo_id IN (SELECT id FROM activos WHERE tipo = ?)', l.precio, c.renta_id, l.tipo);
       }

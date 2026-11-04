@@ -145,7 +145,7 @@ async function formularioCotizacion(c) {
     return Math.abs(i.precio_dia - auto) > 0.005 ? Math.round(i.precio_dia * f * 100) / 100 : '';
   };
   abrirDlg(`${dlgHead(c ? `Editar ${esc(c.folio)}` : 'Nueva cotización')}
-    ${c && c.renta_id ? `<p class="muted" style="background:var(--warn-bg,#fff4d6);padding:8px 10px;border-radius:8px">Esta cotización ya es una renta. Los cambios de <b>días, precios, logística e IVA</b> también se aplican a la renta, para que lo cotizado y lo cobrado cuadren. Las cantidades de piezas no se pueden cambiar aquí.</p>` : ''}
+    ${c && c.renta_id ? `<p class="muted" style="background:var(--warn-bg,#fff4d6);padding:8px 10px;border-radius:8px">Esta cotización ya es una renta. Los cambios de <b>piezas, días, precios, logística e IVA</b> también se aplican a la renta, para que lo cotizado y lo cobrado cuadren. Si cambias cantidades, el equipo entregado de la renta sube o baja lo mismo.</p>` : ''}
     <form id="fCot">
       <label>Cliente existente (opcional)</label>
       <select name="cliente_id"><option value="">— Cliente nuevo / prospecto —</option>${clientes.map(cl => `<option value="${cl.id}" ${c && c.cliente_id === cl.id ? 'selected' : ''}>${esc(cl.nombre)}${cl.telefono ? ' · ' + esc(cl.telefono) : ''}</option>`).join('')}</select>
@@ -201,7 +201,6 @@ async function formularioCotizacion(c) {
   form.elements.dias.oninput = () => { sincronizarRecoleccion(); recalc(); };
   [...$$('#tiposCot input', form), form.elements.logistico].forEach(i => i.oninput = recalc);
   form.elements.iva.onchange = recalc;
-  if (c && c.renta_id) $$('.pick .q', form).forEach(q => { q.readOnly = true; q.title = 'Las piezas ya están asignadas a la renta'; });
   recalc();
 
   form.onsubmit = async e => {
