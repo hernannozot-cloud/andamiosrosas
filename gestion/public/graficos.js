@@ -121,7 +121,7 @@ async function pintarGraficoVentas(selector, sucursal = null) {
   if (!datos.length) { cont.innerHTML = '<div class="card"><h3 style="margin:0 0 6px">Ventas por mes</h3><p class="muted">Aún no hay ventas registradas.</p></div>'; return; }
   const cubs = cubetasVentas(datos);
   const total = cubs.reduce((s, b) => s + b.total, 0), mejor = cubs.reduce((a, b) => (b.total > a.total ? b : a), cubs[0]);
-  cont.innerHTML = `<div class="card"><div class="toolbar" style="margin-bottom:4px"><h3 style="margin:0">Ventas por mes</h3><span class="spacer"></span><span class="muted">Ventas con IVA, por mes de inicio de la renta</span></div>
+  cont.innerHTML = `<div class="card"><div class="toolbar" style="margin-bottom:4px"><h3 style="margin:0">Ventas por mes</h3><span class="spacer"></span><span class="muted">Ventas de Andamios Rosas con IVA (Ensenada: solo su 60%), por mes de inicio de la renta</span></div>
     ${svgGraficoVentas(cubs, Math.max(300, Math.round(cont.clientWidth - 34)))}
     <div class="leyenda"><span class="gr-c">Cobrado</span><span class="gr-b">Por cobrar</span></div>
     <p class="muted" style="margin:6px 0 0">${mxn(total)} en ${cubs.length} mes${cubs.length === 1 ? '' : 'es'} · promedio ${mxn(total / cubs.length)} por mes · mejor mes: ${etiquetaCubeta(mejor.mes, 'mes')} (${mxn(mejor.total)})</p></div>`;

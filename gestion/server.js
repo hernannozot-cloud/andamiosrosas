@@ -280,6 +280,18 @@ function fotoDe(tipo) {
 }
 
 // ---------- Rentas ----------
+// Convenio de Ensenada: de la renta de piezas (sin IVA) a Andamios Rosas le toca el 60% y al operador el 40%;
+// la logística (traslado, montaje, recolección y cualquier cargo adicional) es 100% del operador y NO es venta de
+// Andamios Rosas. El IVA de la parte de Andamios Rosas se calcula aparte sobre su 60%. El operador cobra todo al cliente
+// y entrega a Andamios Rosas su parte. En Toluca todo es venta de Andamios Rosas.
+const PARTE_AR_ENSENADA = 0.6;
+const r2 = n => Math.round(n * 100) / 100;
+function parteAndamiosRosas(r, subtotal, total) {
+  if (r.sucursal !== 'Ensenada') return { venta_ar_sin_iva: subtotal + r.extra, venta_ar_iva: total - subtotal - r.extra, venta_ar: total, parte_operador: 0, logistica_operador: 0 };
+  const sinIva = r2(subtotal * PARTE_AR_ENSENADA), iva = r2(sinIva * (r.iva_pct || 0) / 100);
+  return { venta_ar_sin_iva: sinIva, venta_ar_iva: iva, venta_ar: r2(sinIva + iva),
+    parte_operador: r2(subtotal - sinIva), logistica_operador: r.extra };
+}
 function rentaCompleta(r) {
   const piezas = all(`SELECT a.id, a.codigo, a.tipo, a.categoria, ra.precio_dia FROM renta_activos ra
     JOIN activos a ON a.id = ra.activo_id WHERE ra.renta_id = ? ORDER BY a.tipo, a.codigo`, r.id);
@@ -292,6 +304,7 @@ function rentaCompleta(r) {
   const subtotal = piezas.reduce((s, p) => s + p.precio_dia, 0) * r.dias;
   const iva = Math.round((subtotal + r.extra) * (r.iva_pct || 0)) / 100;
   const total = subtotal + r.extra + iva;
+  const ar = parteAndamiosRosas(r, subtotal, total);
   const pagado = pagos.reduce((s, p) => s + p.monto, 0);
   const fin = addDays(r.fecha_inicio, r.dias);
   const t = hoy();
@@ -300,7 +313,7 @@ function rentaCompleta(r) {
   return {
     ...r, cliente_nombre: r.cliente_nombre, cliente_telefono: r.cliente_telefono,
     fecha_fin: fin, restantes, vencida: r.estado === 'activa' && fin < t,
-    grupos: [...grupos.values()], pagos, subtotal, iva, total, pagado, saldo: Math.round((total - pagado) * 100) / 100,
+    grupos: [...grupos.values()], pagos, subtotal, iva, total, pagado, saldo: Math.round((total - pagado) * 100) / 100, ...ar,
     equipo: all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ? ORDER BY tipo', r.id),
   };
 }
@@ -534,21 +547,34 @@ function reportes(desde, hasta, sucursal = null) {
   const fSuc = sucursal ? ' AND r.sucursal = ?' : '', pSuc = sucursal ? [sucursal] : [];
   const cobrado = get(`SELECT COALESCE(SUM(monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != ? AND p.fecha BETWEEN ? AND ?${fSuc}`,
     'cancelada', desde, hasta, ...pSuc).s;
-  const masRentado = all(`SELECT a.tipo, a.categoria, COUNT(*) piezas, SUM(r.dias) pz_dia, SUM(ra.precio_dia * r.dias) ingreso
+  // Ingreso por tipo de pieza: en Ensenada solo cuenta el 60% de Andamios Rosas.
+  const masRentado = all(`SELECT a.tipo, a.categoria, COUNT(*) piezas, SUM(r.dias) pz_dia,
+      SUM(ra.precio_dia * r.dias * CASE WHEN r.sucursal = 'Ensenada' THEN ${PARTE_AR_ENSENADA} ELSE 1 END) ingreso
     FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
     WHERE r.estado != 'cancelada' AND r.fecha_inicio BETWEEN ? AND ?${fSuc} GROUP BY a.tipo, a.categoria ORDER BY pz_dia DESC`, desde, hasta, ...pSuc);
+  const suma = (rs, k) => r2(rs.reduce((t, r) => t + r[k], 0));
   const porSucursal = SUCURSALES.map(s => {
     const rs = enPeriodo.filter(r => r.sucursal === s);
-    return { sucursal: s, rentas: rs.length, facturado: rs.reduce((t, r) => t + r.total, 0),
+    return { sucursal: s, rentas: rs.length,
+      clientes: suma(rs, 'total'), // lo que pagan los clientes (con IVA y logística)
+      facturado: suma(rs, 'venta_ar'), ventaSinIva: suma(rs, 'venta_ar_sin_iva'), // venta de Andamios Rosas
+      operador: suma(rs, 'parte_operador'), logistica: suma(rs, 'logistica_operador'),
       cobrado: get(`SELECT COALESCE(SUM(monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != 'cancelada' AND p.fecha BETWEEN ? AND ? AND r.sucursal = ?`, desde, hasta, s).s,
       porCobrar: rs.reduce((t, r) => t + Math.max(r.saldo, 0), 0) };
   });
+  // Convenio de Ensenada en el periodo (solo si se ve Ensenada o el total).
+  const rsE = sucursal === 'Toluca' ? [] : enPeriodo.filter(r => r.sucursal === 'Ensenada');
+  const convenio = rsE.length ? {
+    rentas: rsE.length, rentaSinIva: suma(rsE, 'subtotal'), parteAR: suma(rsE, 'venta_ar_sin_iva'), ivaAR: suma(rsE, 'venta_ar_iva'),
+    parteOperador: suma(rsE, 'parte_operador'), logistica: suma(rsE, 'logistica_operador'),
+    totalOperador: r2(suma(rsE, 'parte_operador') + suma(rsE, 'logistica_operador')), clientes: suma(rsE, 'total'),
+  } : null;
   const clientes = new Map();
   for (const r of rentas) {
     const c = clientes.get(r.cliente_id) || { nombre: r.cliente_nombre, rentas: 0, total: 0, pagado: 0 };
     c.rentas++; c.total += r.total; c.pagado += r.pagado; clientes.set(r.cliente_id, c);
   }
-  const facturado = rentas.reduce((s, r) => s + r.total, 0);
+  const facturado = rentas.reduce((s, r) => s + r.venta_ar, 0); // ventas de Andamios Rosas (sin la parte del operador de Ensenada)
   // Lo cobrado en el periodo por forma de pago (lo que no tiene forma capturada queda en "sin")
   const porForma = { efectivo: 0, transferencia: 0, sin: 0 };
   for (const x of all(`SELECT COALESCE(p.forma, 'sin') forma, SUM(p.monto) monto FROM pagos p JOIN rentas r ON r.id = p.renta_id
@@ -557,9 +583,9 @@ function reportes(desde, hasta, sucursal = null) {
   const pagadas = rentas.filter(r => r.saldo <= 0.5), conSaldo = rentas.filter(r => r.saldo > 0.5);
   const orden = [...rentas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio) || a.id - b.id);
   return {
-    desde, hasta, sucursal, porSucursal, rentas: rentas.length,
-    facturado, cobrado,
-    iva: rentas.reduce((s, r) => s + r.iva, 0), sinIva: rentas.reduce((s, r) => s + r.subtotal + r.extra, 0),
+    desde, hasta, sucursal, porSucursal, convenio, rentas: rentas.length,
+    facturado, cobrado, clientes: suma(rentas, 'total'),
+    iva: suma(rentas, 'venta_ar_iva'), sinIva: suma(rentas, 'venta_ar_sin_iva'),
     porCobrar: rentas.reduce((s, r) => s + Math.max(r.saldo, 0), 0),
     ticket: rentas.length ? facturado / rentas.length : 0,
     diasRentados: rentas.reduce((s, r) => s + r.dias, 0),
@@ -574,6 +600,7 @@ function reportes(desde, hasta, sucursal = null) {
       fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, dias: r.dias,
       piezas: r.grupos.map(g => `${g.cantidad} ${g.tipo}`).join(' · '),
       cobrado: r.subtotal + r.extra, iva: r.iva, total: r.total, pagado: r.pagado, saldo: r.saldo,
+      venta_ar: r.venta_ar, operador: r2(r.parte_operador + r.logistica_operador),
       forma_pago: [...new Set(r.pagos.map(p => FORMAS_PAGO[p.forma] || p.nota).filter(Boolean))].join(', '),
       facturada: !!r.facturada, factura_folio: r.factura_folio, con_iva: r.iva_pct > 0,
     })),
@@ -643,8 +670,8 @@ function resumen() {
     vencidas: activas.filter(r => r.vencida).length,
     apartadas: rentas.filter(r => r.estado === 'apartada').length,
     cotizacionesPendientes: get("SELECT COUNT(*) c FROM cotizaciones WHERE estatus = 'Pendiente'").c,
-    ventasTotal: rentas.reduce((s, r) => s + r.total, 0),
-    ventasMes: rentas.filter(r => r.fecha_inicio.slice(0, 7) === mes).reduce((s, r) => s + r.total, 0),
+    ventasTotal: rentas.reduce((s, r) => s + r.venta_ar, 0), // ventas de Andamios Rosas (Ensenada: solo su 60%)
+    ventasMes: rentas.filter(r => r.fecha_inicio.slice(0, 7) === mes).reduce((s, r) => s + r.venta_ar, 0),
     porCobrar: rentas.reduce((s, r) => s + Math.max(r.saldo, 0), 0),
     cobradoMes: get("SELECT COALESCE(SUM(p.monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != 'cancelada' AND substr(p.fecha,1,7) = ?", mes).s,
     porRegresar: activas.sort((a, b) => a.fecha_fin.localeCompare(b.fecha_fin)).slice(0, 12),
@@ -991,16 +1018,18 @@ route('GET', /^\/api\/reportes$/, (ctx) => {
   return reportes(desde, hasta, sucursalValida(ctx.query.get('sucursal')));
 });
 
-// Ventas agrupadas por mes de inicio de la renta (con IVA); "cobrado" + "porCobrar" = total. Opcional: ?sucursal=Toluca|Ensenada.
+// Ventas de Andamios Rosas agrupadas por mes de inicio de la renta (con IVA; en Ensenada solo su 60% de la renta).
+// "cobrado" + "porCobrar" = total, repartidos en la misma proporción que lo pagado por el cliente. Opcional: ?sucursal=Toluca|Ensenada.
 route('GET', /^\/api\/ventas-mensuales$/, (ctx) => {
   const suc = sucursalValida(ctx.query.get('sucursal'));
   const meses = new Map();
   for (const r of todasRentas().filter(x => x.estado !== 'cancelada' && (!suc || x.sucursal === suc))) {
     const k = r.fecha_inicio.slice(0, 7);
     const b = meses.get(k) || { mes: k, rentas: 0, total: 0, sinIva: 0, iva: 0, cobrado: 0, porCobrar: 0 };
-    const pendiente = Math.max(r.saldo, 0);
-    b.rentas++; b.total += r.total; b.sinIva += r.subtotal + r.extra; b.iva += r.iva;
-    b.porCobrar += pendiente; b.cobrado += r.total - pendiente;
+    const fracPend = r.total > 0 ? Math.min(1, Math.max(r.saldo, 0) / r.total) : 0;
+    const pendiente = r2(r.venta_ar * fracPend);
+    b.rentas++; b.total += r.venta_ar; b.sinIva += r.venta_ar_sin_iva; b.iva += r.venta_ar_iva;
+    b.porCobrar += pendiente; b.cobrado += r.venta_ar - pendiente;
     meses.set(k, b);
   }
   return [...meses.values()].sort((a, b) => a.mes.localeCompare(b.mes));
