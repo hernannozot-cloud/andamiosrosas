@@ -18,7 +18,8 @@ const NAVEGADORES = [
   '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
 ].filter(Boolean);
 const LOGO = path.join(__dirname, '..', 'sitio-web', 'assets', 'logo.png');
-const WHATSAPP = '55 3948 1162';
+// WhatsApp que aparece al pie del PDF según la sucursal de la cotización.
+const WHATSAPP = { Toluca: '55 3948 1162', Ensenada: '646 947 3285' };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = n => '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -55,6 +56,8 @@ function htmlCotizacion(c) {
   for (let k = 0; k < relleno; k++) filas.push(`<tr class="${(filas.length) % 2 ? 'alt' : ''} vacia"><td>&nbsp;</td><td></td><td></td><td></td><td></td></tr>`);
   const traslado = c.fecha_traslado ? `<div>Fecha de traslado: <b>${esc(fechaLarga(c.fecha_traslado))}</b></div>` : '';
   const recoleccion = c.fecha_recoleccion ? `<div>Fecha de recolección: <b>${esc(fechaLarga(c.fecha_recoleccion))}</b></div>` : '';
+  const sucursal = c.sucursal || 'Toluca';
+  const whatsapp = WHATSAPP[sucursal] || WHATSAPP.Toluca;
   return `<!DOCTYPE html><html lang="es-MX"><head><meta charset="UTF-8"><title>${esc(c.folio)} ${esc(c.nombre)}</title>
 <style>
 @page { size: A4; margin: 0; }
@@ -92,6 +95,8 @@ table.t { width: 100%; border-collapse: collapse; margin-top: 8px; }
     <div class="r"><span class="lbl2">Número:</span><span style="min-width:70px;text-align:center">${esc(c.folio)}</span></div>
     <div class="l"><span class="lbl">DIRECCIÓN:</span><span>${esc(c.direccion || '')}</span></div>
     <div class="r"><span class="lbl2">Fecha:</span><span style="min-width:70px;text-align:center;font-size:8pt">${esc(fechaLarga(c.fecha))}</span></div>
+    <div class="l"><span class="lbl">SUCURSAL:</span><span>${esc(sucursal)}</span></div>
+    <div class="r"><span class="lbl2">WhatsApp:</span><span style="min-width:70px;text-align:center">${esc(whatsapp)}</span></div>
   </div>
   <table class="t"><thead><tr><th class="d">Descripción</th><th>Cantidad</th><th>Precio por día</th><th>Días</th><th class="r">Sub-total</th></tr></thead><tbody>${filas.join('')}</tbody></table>
   <table class="tot">
@@ -100,7 +105,7 @@ table.t { width: 100%; border-collapse: collapse; margin-top: 8px; }
     <tr class="final"><td>TOTAL:</td><td>${money(c.total)}</td></tr>
   </table>
   <div class="extra">${traslado}${recoleccion}${c.notas ? `<div>Observaciones: ${esc(c.notas)}</div>` : ''}</div>
-</div><div class="pie">Andamios Rosas · WhatsApp ${WHATSAPP} · andamiosrosas.com</div></div></body></html>`;
+</div><div class="pie">Andamios Rosas ${esc(sucursal)} · WhatsApp ${esc(whatsapp)} · andamiosrosas.com</div></div></body></html>`;
 }
 
 // Espera (hasta límite ms) a que el PDF exista y deje de crecer; regresa su contenido o null.
