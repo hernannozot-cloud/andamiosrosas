@@ -109,6 +109,26 @@ if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'sucursa
   db.exec(`UPDATE rentas SET sucursal = (SELECT q.sucursal FROM cotizaciones q WHERE q.renta_id = rentas.id)
     WHERE EXISTS (SELECT 1 FROM cotizaciones q WHERE q.renta_id = rentas.id)`);
 }
+// Migración: sucursal de cada pieza del inventario. Lo que ya existía es de Toluca.
+if (!db.prepare('PRAGMA table_info(activos)').all().some(c => c.name === 'sucursal')) {
+  db.exec("ALTER TABLE activos ADD COLUMN sucursal TEXT NOT NULL DEFAULT 'Toluca'");
+}
+// Una sola vez: el equipo que se mandó de Toluca a Ensenada (6 andamios plegables, 1 juego de 4 llantas y 1 repisa).
+// Se eligen piezas disponibles que no estén en una renta vigente, empezando por los códigos más altos.
+if (!db.prepare("SELECT 1 FROM importaciones WHERE nombre = 'ensenada_inicial'").get()) {
+  db.exec('BEGIN');
+  try {
+    for (const [tipo, n] of [['Andamio Plegable', 6], ['Llanta', 4], ['Repisa de Trabajo', 1]]) {
+      const ids = db.prepare(`SELECT a.id FROM activos a WHERE a.tipo = ? AND a.estado = 'Disponible' AND a.sucursal = 'Toluca'
+        AND a.id NOT IN (SELECT ra.activo_id FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id WHERE r.estado IN ('apartada','activa'))
+        ORDER BY a.codigo DESC LIMIT ?`).all(tipo, n).map(x => x.id);
+      for (const id of ids) db.prepare("UPDATE activos SET sucursal = 'Ensenada' WHERE id = ?").run(id);
+      console.log(`Ensenada: ${ids.length} de ${n} "${tipo}" asignadas.`);
+    }
+    db.prepare("INSERT INTO importaciones (nombre, fecha) VALUES ('ensenada_inicial', ?)").run(new Date().toLocaleDateString('en-CA'));
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
 const sucursalValida = s => { if (s && !SUCURSALES.includes(String(s))) throw bad('Sucursal inválida'); return s ? String(s) : null; };
 if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct')) {
   db.exec('ALTER TABLE rentas ADD COLUMN iva_pct REAL NOT NULL DEFAULT 0');
@@ -189,13 +209,15 @@ class HttpError extends Error { constructor(status, msg) { super(msg); this.stat
 const bad = msg => new HttpError(400, msg);
 
 // ---------- Disponibilidad ----------
-function ocupados(tipo, inicio, dias, excluirRenta = 0) {
+// Cada sucursal tiene su propio inventario: con `suc` ('Toluca' o 'Ensenada') solo cuentan sus piezas y sus rentas;
+// sin `suc` se cuenta todo junto (vista "Todas").
+function ocupados(tipo, inicio, dias, excluirRenta = 0, suc = null) {
   const fin = addDays(inicio, dias);
   const t = hoy();
   const set = new Set();
   const rows = all(`SELECT ra.activo_id, r.fecha_inicio, r.dias, r.estado
     FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
-    WHERE r.estado IN ('apartada','activa') AND a.tipo = ? AND r.id != ?`, tipo, excluirRenta);
+    WHERE r.estado IN ('apartada','activa') AND a.tipo = ? AND r.id != ? AND (? IS NULL OR a.sucursal = ?)`, tipo, excluirRenta, suc, suc);
   for (const r of rows) {
     let finR = addDays(r.fecha_inicio, r.dias);
     if (r.estado === 'activa' && finR <= t) finR = addDays(t, 1); // vencida: sigue en obra
@@ -203,17 +225,17 @@ function ocupados(tipo, inicio, dias, excluirRenta = 0) {
   }
   return set;
 }
-function libres(tipo, inicio, dias, excluirRenta = 0) {
-  const busy = ocupados(tipo, inicio, dias, excluirRenta);
-  return all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo)
+function libres(tipo, inicio, dias, excluirRenta = 0, suc = null) {
+  const busy = ocupados(tipo, inicio, dias, excluirRenta, suc);
+  return all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' AND (? IS NULL OR sucursal = ?) ORDER BY codigo", tipo, suc, suc)
     .filter(a => !busy.has(a.id));
 }
 // La disponibilidad y lo "en renta" salen del EQUIPO ENTREGADO de cada renta (renta_equipo), por cantidad de cada tipo.
-const operativosTipo = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado = 'Disponible'", tipo).n;
-function usoMaximo(tipo, inicio, dias, excluirRenta = 0) { // máximo de piezas del tipo en uso en un mismo día del periodo
+const operativosTipo = (tipo, suc = null) => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado = 'Disponible' AND (? IS NULL OR sucursal = ?)", tipo, suc, suc).n;
+function usoMaximo(tipo, inicio, dias, excluirRenta = 0, suc = null) { // máximo de piezas del tipo en uso en un mismo día del periodo
   const fin = addDays(inicio, dias), t = hoy();
   const rows = all(`SELECT e.cantidad, r.fecha_inicio, r.dias, r.estado FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
-    WHERE e.tipo = ? AND r.estado IN ('apartada','activa') AND r.id != ?`, tipo, excluirRenta);
+    WHERE e.tipo = ? AND r.estado IN ('apartada','activa') AND r.id != ? AND (? IS NULL OR r.sucursal = ?)`, tipo, excluirRenta, suc, suc);
   const periodos = rows.map(r => {
     let finR = addDays(r.fecha_inicio, r.dias);
     if (r.estado === 'activa' && finR <= t) finR = addDays(t, 1); // vencida: sigue en obra
@@ -223,16 +245,21 @@ function usoMaximo(tipo, inicio, dias, excluirRenta = 0) { // máximo de piezas 
   for (let d = inicio; d < fin; d = addDays(d, 1)) max = Math.max(max, periodos.filter(p => p.ini <= d && d < p.fin).reduce((s, p) => s + p.n, 0));
   return max;
 }
-const disponiblesTipo = (tipo, inicio, dias, excluirRenta = 0) => Math.max(0, operativosTipo(tipo) - usoMaximo(tipo, inicio, dias, excluirRenta));
-function tiposResumen(inicio = hoy(), dias = 1) {
-  const tipos = all(`SELECT tipo, categoria, COUNT(*) total,
-      SUM(estado = 'Disponible') operativos, SUM(estado = 'Mantenimiento') mantenimiento, SUM(estado = 'Baja') baja,
-      MIN(renta_dia) renta_dia FROM activos GROUP BY tipo, categoria ORDER BY categoria, tipo`);
+const disponiblesTipo = (tipo, inicio, dias, excluirRenta = 0, suc = null) =>
+  Math.max(0, operativosTipo(tipo, suc) - usoMaximo(tipo, inicio, dias, excluirRenta, suc));
+// Resumen por tipo de pieza. Con `suc`, los conteos son solo de esa sucursal (los tipos que no tiene salen en 0).
+function tiposResumen(inicio = hoy(), dias = 1, suc = null) {
+  const tipos = all(`SELECT tipo, categoria, SUM(? IS NULL OR sucursal = ?) total,
+      SUM(estado = 'Disponible' AND (? IS NULL OR sucursal = ?)) operativos,
+      SUM(estado = 'Mantenimiento' AND (? IS NULL OR sucursal = ?)) mantenimiento, SUM(estado = 'Baja' AND (? IS NULL OR sucursal = ?)) baja,
+      SUM(sucursal = 'Toluca') pz_toluca, SUM(sucursal = 'Ensenada') pz_ensenada,
+      MIN(renta_dia) renta_dia FROM activos GROUP BY tipo, categoria ORDER BY categoria, tipo`, suc, suc, suc, suc, suc, suc, suc, suc);
   const enRenta = new Map(all(`SELECT e.tipo, SUM(e.cantidad) n FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
-      WHERE r.estado = 'activa' GROUP BY e.tipo`).map(x => [x.tipo, x.n]));
+      WHERE r.estado = 'activa' AND (? IS NULL OR r.sucursal = ?) GROUP BY e.tipo`, suc, suc).map(x => [x.tipo, x.n]));
   return tipos.map(t => ({
     ...t, rentados: enRenta.get(t.tipo) || 0,
-    disponibles: disponiblesTipo(t.tipo, inicio, dias),
+    disponibles: disponiblesTipo(t.tipo, inicio, dias, 0, suc),
+    porSucursal: { Toluca: t.pz_toluca, Ensenada: t.pz_ensenada },
     foto: fotoDe(t.tipo),
   }));
 }
@@ -308,11 +335,11 @@ function crearRenta(b) {
       const cant = Number(l.cantidad);
       if (!Number.isInteger(cant)) throw bad('Cantidad inválida');
       const tipo = String(l.tipo);
-      const hay = disponiblesTipo(tipo, b.fecha_inicio, dias);
-      if (hay < cant) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${b.fecha_inicio} al ${addDays(b.fecha_inicio, dias)}`);
-      // Las piezas (códigos) solo se asignan como referencia y para el precio: primero las libres en esas fechas.
-      const libresIds = libres(tipo, b.fecha_inicio, dias);
-      const todas = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo);
+      const hay = disponiblesTipo(tipo, b.fecha_inicio, dias, 0, sucursal);
+      if (hay < cant) throw bad(`En ${sucursal} solo hay ${hay} de "${tipo}" disponibles del ${b.fecha_inicio} al ${addDays(b.fecha_inicio, dias)}`);
+      // Las piezas (códigos) solo se asignan como referencia y para el precio: primero las libres en esas fechas (de la misma sucursal).
+      const libresIds = libres(tipo, b.fecha_inicio, dias, 0, sucursal);
+      const todas = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' AND sucursal = ? ORDER BY codigo", tipo, sucursal);
       const piezas = [...libresIds, ...todas.filter(a => !libresIds.some(x => x.id === a.id))].slice(0, cant);
       return { l, cant, piezas };
     });
@@ -431,6 +458,7 @@ function actualizarCotizacion(id, b) {
   // y se revisa que el equipo esté disponible en las nuevas fechas. Una renta ya entregada conserva su fecha de inicio.
   let nuevoInicio = null, ren = null, equipoNuevo = null;
   const nuevas = new Map(d.lineas.map(l => [l.tipo, l.cantidad]));
+  const sucRenta = d.sucursal || c.sucursal || 'Toluca'; // la renta queda en la sucursal de la cotización y usa su inventario
   if (c.renta_id) {
     ren = get('SELECT estado, fecha_inicio, dias FROM rentas WHERE id = ?', c.renta_id);
     const antes = new Map(all('SELECT tipo, cantidad FROM cotizacion_items WHERE cotizacion_id = ?', id).map(i => [i.tipo, i.cantidad]));
@@ -450,8 +478,8 @@ function actualizarCotizacion(id, b) {
       const cambiaFechas = ren.estado === 'apartada' && (inicio !== ren.fecha_inicio || d.dias !== ren.dias);
       for (const [tipo, n] of equipoNuevo) {
         if (n > 0 && (cambiaFechas || subio(tipo))) {
-          const hay = disponiblesTipo(tipo, inicio, d.dias, c.renta_id);
-          if (hay < n) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${inicio} al ${addDays(inicio, d.dias)} (necesitas ${n})`);
+          const hay = disponiblesTipo(tipo, inicio, d.dias, c.renta_id, sucRenta);
+          if (hay < n) throw bad(`En ${sucRenta} solo hay ${hay} de "${tipo}" disponibles del ${inicio} al ${addDays(inicio, d.dias)} (necesitas ${n})`);
         }
       }
     }
@@ -480,8 +508,8 @@ function actualizarCotizacion(id, b) {
           run('DELETE FROM renta_activos WHERE renta_id = ? AND activo_id = ?', c.renta_id, aid);
         }
         if (quiere > tiene.length) {
-          const ya = new Set(tiene), libresT = libres(tipo, inicio, d.dias, c.renta_id).filter(a => !ya.has(a.id));
-          const resto = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' ORDER BY codigo", tipo)
+          const ya = new Set(tiene), libresT = libres(tipo, inicio, d.dias, c.renta_id, sucRenta).filter(a => !ya.has(a.id));
+          const resto = all("SELECT * FROM activos WHERE tipo = ? AND estado = 'Disponible' AND sucursal = ? ORDER BY codigo", tipo, sucRenta)
             .filter(a => !ya.has(a.id) && !libresT.some(x => x.id === a.id));
           const extra = [...libresT, ...resto].slice(0, quiere - tiene.length);
           if (extra.length < quiere - tiene.length) throw bad(`No hay suficientes piezas de "${tipo}" en el inventario (necesitas ${quiere})`);
@@ -739,20 +767,32 @@ route('GET', /^\/api\/resumen$/, () => resumen());
 route('GET', /^\/api\/tipos$/, (ctx) => {
   const inicio = esFecha(ctx.query.get('inicio')) ? ctx.query.get('inicio') : hoy();
   const dias = Math.max(1, Number(ctx.query.get('dias')) || 1);
-  return tiposResumen(inicio, dias);
+  return tiposResumen(inicio, dias, sucursalValida(ctx.query.get('sucursal')));
 });
 route('GET', /^\/api\/activos$/, (ctx) => {
-  const tipo = ctx.query.get('tipo');
-  const rows = tipo ? all('SELECT * FROM activos WHERE tipo = ? ORDER BY codigo', tipo) : all('SELECT * FROM activos ORDER BY tipo, codigo');
+  const tipo = ctx.query.get('tipo'), suc = sucursalValida(ctx.query.get('sucursal'));
+  const rows = all('SELECT * FROM activos WHERE (? IS NULL OR tipo = ?) AND (? IS NULL OR sucursal = ?) ORDER BY tipo, codigo', tipo, tipo, suc, suc);
   return rows.map(a => ({ ...a, en_renta: null })); // lo "en renta" se mide por cantidad (equipo entregado), no por pieza
 });
-// Rentas activas que tienen en campo piezas de un tipo (según el equipo entregado).
+// Rentas activas que tienen en campo piezas de un tipo (según el equipo entregado). Opcional: ?sucursal=.
 route('GET', /^\/api\/equipo-en-campo$/, (ctx) => {
-  const t = hoy();
-  return all(`SELECT r.folio, c.nombre cliente, e.cantidad, r.fecha_inicio, r.dias FROM renta_equipo e
+  const t = hoy(), suc = sucursalValida(ctx.query.get('sucursal'));
+  return all(`SELECT r.folio, r.sucursal, c.nombre cliente, e.cantidad, r.fecha_inicio, r.dias FROM renta_equipo e
     JOIN rentas r ON r.id = e.renta_id JOIN clientes c ON c.id = r.cliente_id
-    WHERE e.tipo = ? AND r.estado = 'activa' ORDER BY r.fecha_inicio`, String(ctx.query.get('tipo') || ''))
+    WHERE e.tipo = ? AND r.estado = 'activa' AND (? IS NULL OR r.sucursal = ?) ORDER BY r.fecha_inicio`, String(ctx.query.get('tipo') || ''), suc, suc)
     .map(x => ({ ...x, fecha_fin: addDays(x.fecha_inicio, x.dias), vencida: addDays(x.fecha_inicio, x.dias) < t }));
+});
+// Pasar piezas de una sucursal a otra: mueve `cantidad` piezas disponibles del tipo, que no estén en una renta vigente.
+route('POST', /^\/api\/activos\/mover$/, (ctx) => {
+  const b = ctx.body, tipo = String(b.tipo || ''), de = sucursalValida(b.de), a = sucursalValida(b.a), n = Number(b.cantidad);
+  if (!de || !a || de === a) throw bad('Elige dos sucursales distintas');
+  if (!Number.isInteger(n) || n < 1) throw bad('Cantidad inválida');
+  const ids = all(`SELECT x.id FROM activos x WHERE x.tipo = ? AND x.estado = 'Disponible' AND x.sucursal = ?
+    AND x.id NOT IN (SELECT ra.activo_id FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id WHERE r.estado IN ('apartada','activa'))
+    ORDER BY x.codigo DESC LIMIT ?`, tipo, de, n).map(x => x.id);
+  if (ids.length < n) throw bad(`En ${de} solo hay ${ids.length} de "${tipo}" disponibles para mover`);
+  tx(() => ids.forEach(id => run('UPDATE activos SET sucursal = ? WHERE id = ?', a, id)));
+  return { ok: true, movidas: ids.length };
 });
 route('POST', /^\/api\/activos$/, (ctx) => {
   const b = ctx.body;
@@ -760,9 +800,10 @@ route('POST', /^\/api\/activos$/, (ctx) => {
   if (!codigo || !tipo) throw bad('Código y tipo son obligatorios');
   if (get('SELECT id FROM activos WHERE codigo = ?', codigo)) throw bad('Ese código ya existe');
   const base = get('SELECT categoria, renta_dia, valor FROM activos WHERE tipo = ? LIMIT 1', tipo);
-  run('INSERT INTO activos (codigo,tipo,categoria,valor,renta_dia,estado,condicion,ubicacion,notas) VALUES (?,?,?,?,?,?,?,?,?)',
+  run('INSERT INTO activos (codigo,tipo,categoria,valor,renta_dia,estado,condicion,ubicacion,notas,sucursal) VALUES (?,?,?,?,?,?,?,?,?,?)',
     codigo, tipo, base?.categoria || (/^andamio/i.test(tipo) ? 'andamio' : 'accesorio'),
-    Number(b.valor) || base?.valor || 0, Number(b.renta_dia) || base?.renta_dia || 0, 'Disponible', b.condicion || null, b.ubicacion || 'Bodega', b.notas || null);
+    Number(b.valor) || base?.valor || 0, Number(b.renta_dia) || base?.renta_dia || 0, 'Disponible', b.condicion || null, b.ubicacion || 'Bodega', b.notas || null,
+    sucursalValida(b.sucursal) || 'Toluca');
   return { ok: true };
 });
 route('PATCH', /^\/api\/activos\/(\d+)$/, (ctx, id) => {
@@ -770,9 +811,9 @@ route('PATCH', /^\/api\/activos\/(\d+)$/, (ctx, id) => {
   if (b.estado !== undefined && !ESTADOS_ACTIVO.includes(b.estado)) throw bad('Estado inválido');
   const a = get('SELECT * FROM activos WHERE id = ?', id);
   if (!a) throw new HttpError(404, 'Activo no encontrado');
-  run('UPDATE activos SET estado = ?, condicion = ?, ubicacion = ?, notas = ?, renta_dia = ? WHERE id = ?',
+  run('UPDATE activos SET estado = ?, condicion = ?, ubicacion = ?, notas = ?, renta_dia = ?, sucursal = ? WHERE id = ?',
     b.estado ?? a.estado, b.condicion ?? a.condicion, b.ubicacion ?? a.ubicacion, b.notas ?? a.notas,
-    b.renta_dia !== undefined ? Number(b.renta_dia) || 0 : a.renta_dia, id);
+    b.renta_dia !== undefined ? Number(b.renta_dia) || 0 : a.renta_dia, sucursalValida(b.sucursal) || a.sucursal, id);
   return { ok: true };
 });
 
@@ -837,8 +878,8 @@ route('PATCH', /^\/api\/rentas\/(\d+)\/equipo$/, (ctx, id) => {
   }
   if (r.estado !== 'devuelta') { // en rentas vigentes no se puede entregar más de lo que hay libre en esas fechas
     for (const [tipo, c] of limpio) {
-      const hay = disponiblesTipo(tipo, r.fecha_inicio, r.dias, r.id);
-      if (c > hay) throw bad(`Solo hay ${hay} de "${tipo}" disponibles del ${r.fecha_inicio} al ${addDays(r.fecha_inicio, r.dias)}`);
+      const hay = disponiblesTipo(tipo, r.fecha_inicio, r.dias, r.id, r.sucursal);
+      if (c > hay) throw bad(`En ${r.sucursal} solo hay ${hay} de "${tipo}" disponibles del ${r.fecha_inicio} al ${addDays(r.fecha_inicio, r.dias)}`);
     }
   }
   tx(() => {
@@ -904,7 +945,7 @@ route('POST', /^\/api\/rentas\/(\d+)\/extender$/, (ctx, id) => {
   const desde = finActual < t ? t : finActual, diasVentana = diffDays(nuevoFin, desde);
   if (diasVentana > 0 && !b.forzar) {
     for (const e of all('SELECT tipo, cantidad FROM renta_equipo WHERE renta_id = ?', id)) {
-      if (disponiblesTipo(e.tipo, desde, diasVentana, id) < e.cantidad) {
+      if (disponiblesTipo(e.tipo, desde, diasVentana, id, r.sucursal) < e.cantidad) {
         throw bad(`Conflicto: otra renta necesita "${e.tipo}" entre el ${desde} y el ${nuevoFin}`);
       }
     }

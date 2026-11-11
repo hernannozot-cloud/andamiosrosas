@@ -347,11 +347,12 @@ async function nuevaRenta() {
     const my = ++st.fetchId;
     const ini = val('fecha_inicio'), dias = Math.max(1, parseInt(val('dias'), 10) || 1);
     if (!ini) return;
-    const tipos = await act(() => api('GET', `/api/tipos?inicio=${ini}&dias=${dias}`));
+    const suc = val('sucursal');
+    const tipos = await act(() => api('GET', `/api/tipos?inicio=${ini}&dias=${dias}&sucursal=${encodeURIComponent(suc)}`));
     if (!tipos || my !== st.fetchId) return;
     const previos = Object.fromEntries($$('.pick[data-tipo]', form).map(el => [el.dataset.tipo, [$('.q', el).value, $('.p', el).value]]));
     st.tipos = tipos.filter(t => t.operativos > 0);
-    $('#dispInfo').textContent = `(disponibles del ${fechaCorta(ini)} al ${fechaCorta(addDias(ini, dias))})`;
+    $('#dispInfo').textContent = `(disponibles en ${suc} del ${fechaCorta(ini)} al ${fechaCorta(addDias(ini, dias))})`;
     $('#tipos').innerHTML = st.tipos.map(t => `<div class="pick" data-tipo="${esc(t.tipo)}">
       ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
       <div class="grow"><div class="t">${esc(t.tipo)}</div><div class="s ${t.disponibles ? '' : 'err'}">${t.disponibles} disponible${t.disponibles === 1 ? '' : 's'}</div></div>
@@ -361,7 +362,7 @@ async function nuevaRenta() {
     recalc();
   }
   const addDias = (s, n) => { const d = new Date(`${s}T00:00:00`); d.setDate(d.getDate() + n); return d.toLocaleDateString('en-CA'); };
-  ['fecha_inicio', 'dias'].forEach(n => form.elements[n].addEventListener('change', () => { cargarTipos(); }));
+  ['fecha_inicio', 'dias', 'sucursal'].forEach(n => form.elements[n].addEventListener('change', () => { cargarTipos(); }));
   form.elements.extra.oninput = recalc; form.elements.dias.oninput = recalc; form.elements.iva.onchange = recalc;
   await cargarTipos();
 
@@ -380,32 +381,54 @@ async function nuevaRenta() {
 }
 
 // ---------- Inventario ----------
+// Cada pieza es de una sucursal (Toluca o Ensenada). "Todas" suma las dos.
+let sucursalInv = 'todas';
+const qSucInv = (pre = '&') => (sucursalInv === 'todas' ? '' : `${pre}sucursal=${encodeURIComponent(sucursalInv)}`);
 async function vInventario() {
-  const tipos = await api('GET', '/api/tipos');
-  $('#main').innerHTML = `<h2>Inventario</h2><div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">
+  const tipos = (await api('GET', `/api/tipos${qSucInv('?')}`)).filter(t => sucursalInv === 'todas' || t.total > 0);
+  $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Inventario</h2>
+      <select id="sucInv" style="width:auto" title="Sucursal"><option value="todas">Todas las sucursales</option>${SUCURSALES.map(s => `<option value="${s}" ${s === sucursalInv ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+    ${tipos.length ? '' : `<p class="muted">${esc(sucursalInv)} todavía no tiene piezas. Abre un tipo en "Todas las sucursales" y usa "Mover piezas".</p>`}
+    <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr))">
     ${tipos.map(t => `<div class="card" data-tipo="${esc(t.tipo)}" style="cursor:pointer"><div class="row" style="border:0;padding:0;cursor:pointer">
       ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
-      <div class="grow"><div class="t">${esc(t.tipo)}</div><div class="s">${t.total} piezas</div></div></div>
+      <div class="grow"><div class="t">${esc(t.tipo)}</div><div class="s">${t.total} piezas${sucursalInv === 'todas' ? ` · Toluca ${t.porSucursal.Toluca} · Ensenada ${t.porSucursal.Ensenada}` : ''}</div></div></div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><span class="badge ok">${t.disponibles} libres hoy</span>
         <span class="badge info">${t.rentados} en renta</span>${t.mantenimiento ? `<span class="badge warn">${t.mantenimiento} mantenimiento</span>` : ''}${t.baja ? `<span class="badge">${t.baja} baja</span>` : ''}</div></div>`).join('')}</div>`;
   $$('[data-tipo]', $('#main')).forEach(c => c.onclick = () => act(() => abrirTipo(c.dataset.tipo)));
+  $('#sucInv').onchange = e => { sucursalInv = e.target.value; refrescar(); };
 }
 async function abrirTipo(tipo) {
-  const [activos, enCampo] = await Promise.all([api('GET', `/api/activos?tipo=${encodeURIComponent(tipo)}`), api('GET', `/api/equipo-en-campo?tipo=${encodeURIComponent(tipo)}`)]);
+  const qt = encodeURIComponent(tipo);
+  const [activos, enCampo] = await Promise.all([api('GET', `/api/activos?tipo=${qt}${qSucInv()}`), api('GET', `/api/equipo-en-campo?tipo=${qt}${qSucInv()}`)]);
   const totalCampo = enCampo.reduce((s, x) => s + x.cantidad, 0);
-  abrirDlg(`${dlgHead(esc(tipo))}<p class="muted">${activos.length} piezas. Cambia el estado de una pieza si está en mantenimiento o fuera de servicio.</p>
+  const otra = s => (s === 'Toluca' ? 'Ensenada' : 'Toluca');
+  const deDefault = sucursalInv === 'todas' ? 'Toluca' : sucursalInv;
+  abrirDlg(`${dlgHead(`${esc(tipo)}${sucursalInv === 'todas' ? '' : ` · ${esc(sucursalInv)}`}`)}<p class="muted">${activos.length} piezas. Cambia el estado de una pieza si está en mantenimiento o fuera de servicio, o su sucursal si se mandó a otra ciudad.</p>
+    <h3 style="margin-top:6px">Mover piezas a otra sucursal</h3>
+    <form id="fMover" class="f2"><div><label>Cantidad</label><input name="cantidad" type="number" min="1" value="1" required></div>
+      <div><label>De → a</label><select name="de">${SUCURSALES.map(s => `<option value="${s}" ${s === deDefault ? 'selected' : ''}>${s} → ${otra(s)}</option>`).join('')}</select></div>
+      <div style="grid-column:1/-1"><button class="btn small primary" type="submit">Mover piezas</button> <span class="muted">Solo se mueven piezas disponibles que no estén en una renta vigente.</span></div></form>
     <h3 style="margin-top:6px">En campo ahora: ${totalCampo}</h3>
-    ${enCampo.map(x => `<div class="pick"><div class="grow"><div class="t">${esc(x.cliente)} <span class="muted">${esc(x.folio)}</span></div>
+    ${enCampo.map(x => `<div class="pick"><div class="grow"><div class="t">${esc(x.cliente)} <span class="muted">${esc(x.folio)}</span> ${badgeSuc(x.sucursal)}</div>
       <div class="s">Regresa el ${fecha(x.fecha_fin)}</div></div><div>${x.vencida ? '<span class="badge bad">Vencida</span> ' : ''}<span class="money">${x.cantidad}</span></div></div>`).join('') || '<p class="muted">Ninguna pieza de este tipo está en renta.</p>'}
     <p class="muted" style="margin-top:6px">Se calcula con el <b>equipo entregado</b> de cada renta activa.</p>
     <h3>Piezas</h3>
     ${activos.map(a => `<div class="pick"><div class="grow"><div class="t">${esc(a.codigo)}</div>
       <div class="s">${a.en_renta ? `En renta · ${esc(a.en_renta.nombre)} (${esc(a.en_renta.folio)})` : esc(a.ubicacion || '')}</div></div>
+      <select data-suc="${a.id}" style="width:120px" title="Sucursal">${SUCURSALES.map(s => `<option ${a.sucursal === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <select data-act="${a.id}" style="width:150px">${['Disponible', 'Mantenimiento', 'Baja'].map(e => `<option ${a.estado === e ? 'selected' : ''}>${e}</option>`).join('')}</select></div>`).join('')}
     <form id="fAlta" class="f2" style="margin-top:14px"><div><label>Agregar pieza: código</label><input name="codigo" required placeholder="AR-AN-PL-031"></div>
+      <div><label>Sucursal</label><select name="sucursal">${SUCURSALES.map(s => `<option ${s === deDefault ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
       <div style="align-self:end"><button class="btn primary" type="submit">Agregar</button></div></form>`);
   $$('[data-act]', dlg).forEach(s => s.onchange = () => act(async () => { await api('PATCH', `/api/activos/${s.dataset.act}`, { estado: s.value }); toast('Actualizado'); refrescar(); }));
-  $('#fAlta', dlg).onsubmit = e => { e.preventDefault(); act(async () => { await api('POST', '/api/activos', { codigo: new FormData(e.target).get('codigo'), tipo }); toast('Pieza agregada'); abrirTipo(tipo); refrescar(); }); };
+  $$('[data-suc]', dlg).forEach(s => s.onchange = () => act(async () => { await api('PATCH', `/api/activos/${s.dataset.suc}`, { sucursal: s.value }); toast(`Pieza movida a ${s.value}`); refrescar(); }));
+  $('#fMover', dlg).onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target), de = f.get('de'), n = Number(f.get('cantidad'));
+    act(async () => { await api('POST', '/api/activos/mover', { tipo, de, a: otra(de), cantidad: n }); toast(`${n} pieza${n === 1 ? '' : 's'} movida${n === 1 ? '' : 's'} a ${otra(de)}`); abrirTipo(tipo); refrescar(); });
+  };
+  $('#fAlta', dlg).onsubmit = e => { e.preventDefault(); const f = new FormData(e.target); act(async () => { await api('POST', '/api/activos', { codigo: f.get('codigo'), tipo, sucursal: f.get('sucursal') }); toast('Pieza agregada'); abrirTipo(tipo); refrescar(); }); };
 }
 
 // ---------- Clientes ----------
