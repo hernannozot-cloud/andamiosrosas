@@ -100,6 +100,9 @@ if (!colsCot.includes('pendiente_desde')) {
   db.exec('UPDATE cotizaciones SET pendiente_desde = fecha WHERE pendiente_desde IS NULL');
 }
 if (!colsCot.includes('cerrada_auto')) db.exec('ALTER TABLE cotizaciones ADD COLUMN cerrada_auto TEXT');
+// Migración: sucursal de cada cotización (Toluca o Ensenada). Las que ya existían son de Toluca.
+if (!colsCot.includes('sucursal')) db.exec("ALTER TABLE cotizaciones ADD COLUMN sucursal TEXT NOT NULL DEFAULT 'Toluca'");
+const SUCURSALES = ['Toluca', 'Ensenada'];
 if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct')) {
   db.exec('ALTER TABLE rentas ADD COLUMN iva_pct REAL NOT NULL DEFAULT 0');
 }
@@ -389,7 +392,10 @@ function prepararCotizacion(b) {
   }
   const clienteId = Number(b.cliente_id) || null;
   if (clienteId && !get('SELECT id FROM clientes WHERE id = ?', clienteId)) throw bad('Cliente no encontrado');
-  return { dias, nombre, fecha, logistico, ivaPct, lineas, subtotal, clienteId,
+  // Sin sucursal: la nueva queda en Toluca y la editada conserva la suya.
+  const sucursal = b.sucursal ? String(b.sucursal) : null;
+  if (sucursal && !SUCURSALES.includes(sucursal)) throw bad('Sucursal inválida');
+  return { dias, nombre, fecha, logistico, ivaPct, lineas, subtotal, clienteId, sucursal,
     telefono: String(b.telefono || '').trim() || null, direccion: b.direccion || null,
     traslado: b.fecha_traslado || null, recoleccion: b.fecha_recoleccion || null, notas: b.notas || null };
 }
@@ -398,9 +404,9 @@ function crearCotizacion(b) {
   const d = prepararCotizacion(b);
   return tx(() => {
     const id = Number(run(`INSERT INTO cotizaciones (folio, fecha, cliente_id, nombre, telefono, direccion, dias, fecha_traslado, fecha_recoleccion,
-      subtotal, logistico, iva_pct, estatus, notas, creada, pendiente_desde) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      subtotal, logistico, iva_pct, estatus, notas, creada, pendiente_desde, sucursal) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     siguienteFolio(), d.fecha, d.clienteId, d.nombre, d.telefono, d.direccion, d.dias, d.traslado, d.recoleccion, d.subtotal, d.logistico, d.ivaPct,
-    'Pendiente', d.notas, new Date().toISOString(), d.fecha).lastInsertRowid); // toda cotización nueva nace Pendiente
+    'Pendiente', d.notas, new Date().toISOString(), d.fecha, d.sucursal || 'Toluca').lastInsertRowid); // toda cotización nueva nace Pendiente
     for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     return id;
   });
@@ -445,8 +451,9 @@ function actualizarCotizacion(id, b) {
   }
   tx(() => {
     run(`UPDATE cotizaciones SET fecha = ?, cliente_id = ?, nombre = ?, telefono = ?, direccion = ?, dias = ?, fecha_traslado = ?, fecha_recoleccion = ?,
-      subtotal = ?, logistico = ?, iva_pct = ?, notas = ? WHERE id = ?`,
-    d.fecha, d.clienteId, d.nombre, d.telefono, d.direccion, d.dias, d.traslado, d.recoleccion, d.subtotal, d.logistico, d.ivaPct, d.notas, id);
+      subtotal = ?, logistico = ?, iva_pct = ?, notas = ?, sucursal = ? WHERE id = ?`,
+    d.fecha, d.clienteId, d.nombre, d.telefono, d.direccion, d.dias, d.traslado, d.recoleccion, d.subtotal, d.logistico, d.ivaPct, d.notas,
+    d.sucursal || c.sucursal || 'Toluca', id);
     run('DELETE FROM cotizacion_items WHERE cotizacion_id = ?', id);
     for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     if (c.renta_id) {

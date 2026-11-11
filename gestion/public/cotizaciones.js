@@ -19,19 +19,28 @@ const badgeCot = c => {
   return `<span class="badge ${n <= 3 ? 'bad' : 'warn'}">Pendiente · vence ${n <= 0 ? 'hoy' : n === 1 ? 'mañana' : `en ${n} d`}</span>`;
 };
 const piezasCot = c => c.items.map(i => { const m = mostrarItem(i); return `${m.cantidad} ${esc(m.nombre)}`; }).join(' · ') || 'Sin piezas';
-const rowCot = c => `<div class="row" data-cot="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)} <span class="muted">${esc(c.folio)}</span></div>
+// Sucursal (Toluca o Ensenada). En el formulario se propone la última que se usó en este aparato.
+const SUCURSALES = ['Toluca', 'Ensenada'];
+const badgeSuc = s => `<span class="badge" style="background:${s === 'Ensenada' ? '#e0f2fe;color:#075985' : '#fde7f1;color:#9d1250'}">${esc(s || 'Toluca')}</span>`;
+const ultimaSucursal = () => { try { const s = localStorage.getItem('ar_sucursal'); return SUCURSALES.includes(s) ? s : 'Toluca'; } catch { return 'Toluca'; } };
+const recordarSucursal = s => { try { localStorage.setItem('ar_sucursal', s); } catch { /* sin almacenamiento */ } };
+const rowCot = c => `<div class="row" data-cot="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)} <span class="muted">${esc(c.folio)}</span> ${badgeSuc(c.sucursal)}</div>
   <div class="s">${piezasCot(c)} · ${c.dias} día${c.dias > 1 ? 's' : ''} · ${fechaCorta(c.fecha)}</div></div>
   <div style="text-align:right">${badgeCot(c)}<div class="money">${mxn(c.total)}</div></div></div>`;
 
-let filtroCot = 'Pendiente', busquedaCot = '';
+let filtroCot = 'Pendiente', busquedaCot = '', sucursalCot = 'todas';
 async function vCotizaciones() {
-  const cots = await api('GET', '/api/cotizaciones');
+  const todas = await api('GET', '/api/cotizaciones');
+  // El filtro de sucursal aplica a todo el apartado: totales, gráfica y lista.
+  const cots = sucursalCot === 'todas' ? todas : todas.filter(c => (c.sucursal || 'Toluca') === sucursalCot);
   const cont = cots.filter(c => c.estatus === 'Contratada').length, no = cots.filter(c => c.estatus === 'No contratada').length;
   const pend = cots.filter(c => c.estatus === 'Pendiente');
   const filtros = { Pendiente: 'Pendientes', Contratada: 'Contratadas', 'No contratada': 'No contratadas', todas: 'Todas' };
   const cuenta = k => k === 'todas' ? cots.length : cots.filter(c => c.estatus === k).length;
   $('#main').innerHTML = `
-    <div class="toolbar"><h2 style="margin:0">Cotizaciones</h2><span class="spacer"></span><button id="nuevaCot" class="btn primary">+ Nueva cotización</button></div>
+    <div class="toolbar"><h2 style="margin:0">Cotizaciones</h2>
+      <select id="sucCot" style="width:auto" title="Sucursal"><option value="todas">Todas las sucursales</option>${SUCURSALES.map(s => `<option value="${s}" ${s === sucursalCot ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <span class="spacer"></span><button id="nuevaCot" class="btn primary">+ Nueva cotización</button></div>
     <div class="grid">${stat(cots.length, 'Cotizaciones')}${stat(pend.length, 'Pendientes')}${stat(cont, 'Contratadas', 'ok')}
       ${stat(cont + no ? `${Math.round(cont / (cont + no) * 100)}%` : '—', 'Tasa de cierre')}${stat(mxn(pend.reduce((s, c) => s + c.total, 0)), 'Monto pendiente')}</div>
     <div id="grafCot" style="margin-top:14px"></div>
@@ -48,6 +57,7 @@ async function vCotizaciones() {
   pintarGraficoCotizaciones(cots);
   $$('[data-f]').forEach(b => b.onclick = () => { filtroCot = b.dataset.f; refrescar(); });
   $('#buscarCot').oninput = e => { busquedaCot = e.target.value; pintar(); };
+  $('#sucCot').onchange = e => { sucursalCot = e.target.value; refrescar(); };
   $('#nuevaCot').onclick = () => act(nuevaCotizacion);
 }
 
@@ -67,7 +77,7 @@ async function abrirCotizacion(id) {
   const tel = AR.normalizarTelefonoE164(c.telefono || '');
   const wa = tel ? enlaceWhatsApp(tel.slice(1), msgCotizacion(c)) : null;
   abrirDlg(`${dlgHead(`${esc(c.folio)} · ${esc(c.nombre)}`)}
-    <p>${badgeCot(c)} <span class="muted">Cotizada el ${fecha(c.fecha)} · ${c.dias} día${c.dias > 1 ? 's' : ''}</span></p>
+    <p>${badgeSuc(c.sucursal)} ${badgeCot(c)} <span class="muted">Cotizada el ${fecha(c.fecha)} · ${c.dias} día${c.dias > 1 ? 's' : ''}</span></p>
     ${c.estatus === 'Pendiente' ? `<p class="muted">⏳ Pasa sola a "No contratada" el ${fecha(c.vence)} (${c.dias_vigencia} días naturales).</p>` : ''}
     ${c.cerrada_auto ? `<p class="muted">🤖 Pasó a "No contratada" automáticamente el ${fecha(c.cerrada_auto)} por cumplir ${c.dias_vigencia} días. Si el cliente regresa, cámbiala a Pendiente y vuelve a contar ${c.dias_vigencia} días.</p>` : ''}
     ${c.telefono ? `<p class="muted">📞 ${esc(c.telefono)}</p>` : ''}${c.direccion ? `<p class="muted">📍 ${esc(c.direccion)}</p>` : ''}
@@ -147,6 +157,8 @@ async function formularioCotizacion(c) {
   abrirDlg(`${dlgHead(c ? `Editar ${esc(c.folio)}` : 'Nueva cotización')}
     ${c && c.renta_id ? `<p class="muted" style="background:var(--warn-bg,#fff4d6);padding:8px 10px;border-radius:8px">Esta cotización ya es una renta. Los cambios de <b>piezas, días, precios, logística e IVA</b> también se aplican a la renta, para que lo cotizado y lo cobrado cuadren. Si cambias cantidades, el equipo entregado de la renta sube o baja lo mismo.</p>` : ''}
     <form id="fCot">
+      <label>Sucursal</label>
+      <select name="sucursal" required>${SUCURSALES.map(s => `<option ${s === (c?.sucursal || (sucursalCot !== 'todas' ? sucursalCot : ultimaSucursal())) ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label>Cliente existente (opcional)</label>
       <select name="cliente_id"><option value="">— Cliente nuevo / prospecto —</option>${clientes.map(cl => `<option value="${cl.id}" ${c && c.cliente_id === cl.id ? 'selected' : ''}>${esc(cl.nombre)}${cl.telefono ? ' · ' + esc(cl.telefono) : ''}</option>`).join('')}</select>
       <div class="f2"><div><label>Nombre</label><input name="nombre" required value="${esc(c?.nombre || '')}"></div><div><label>Teléfono / WhatsApp</label><input name="telefono" inputmode="tel" value="${esc(c?.telefono || '')}"></div></div>
@@ -210,8 +222,9 @@ async function formularioCotizacion(c) {
       const f = factorJuego(el.dataset.tipo), p = $('.p', el).value;
       return { tipo: el.dataset.tipo, cantidad: (parseInt($('.q', el).value, 10) || 0) * f, precio_dia: p === '' ? '' : Number(p) / f };
     });
+    recordarSucursal(val('sucursal'));
     const body = {
-      cliente_id: val('cliente_id') || null, nombre: val('nombre'), telefono: val('telefono'), fecha: val('fecha'), dias: Number(val('dias')),
+      sucursal: val('sucursal'), cliente_id: val('cliente_id') || null, nombre: val('nombre'), telefono: val('telefono'), fecha: val('fecha'), dias: Number(val('dias')),
       fecha_traslado: val('fecha_traslado') || null, fecha_recoleccion: val('fecha_recoleccion') || null, direccion: val('direccion'),
       logistico: val('logistico'), notas: val('notas'), iva_pct: form.elements.iva.checked ? 16 : 0, items,
     };
