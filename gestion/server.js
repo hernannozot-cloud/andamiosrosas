@@ -1059,13 +1059,14 @@ route('GET', /^\/api\/valor-activos$/, () => {
 // Utilización de la flota: andamios rentados por día (solo Estándar y Plegable; los accesorios no cuentan).
 // Un andamio cuenta como "en uso" desde el día de inicio hasta el día anterior a su fin/devolución; una renta
 // activa y vencida sigue en uso hasta hoy. La serie arranca el día de la primera renta y llega hasta hoy.
-route('GET', /^\/api\/utilizacion$/, () => {
-  const t = hoy();
-  const flota = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado != 'Baja'", tipo).n;
+// Opcional ?sucursal=Toluca|Ensenada: solo la flota de esa sucursal (su inventario actual) y sus rentas.
+route('GET', /^\/api\/utilizacion$/, (ctx) => {
+  const t = hoy(), suc = sucursalValida(ctx.query.get('sucursal'));
+  const flota = tipo => get("SELECT COUNT(*) n FROM activos WHERE tipo = ? AND estado != 'Baja' AND (? IS NULL OR sucursal = ?)", tipo, suc, suc).n;
   // Se mide con el EQUIPO ENTREGADO (casillas de la ficha de la renta), no con las piezas del precio.
   const filas = all(`SELECT r.id, r.fecha_inicio, r.dias, r.estado, r.fecha_devolucion, e.tipo, e.cantidad n
     FROM renta_equipo e JOIN rentas r ON r.id = e.renta_id
-    WHERE r.estado IN ('activa','devuelta') AND e.tipo IN ('Andamio Estandar','Andamio Plegable')`);
+    WHERE r.estado IN ('activa','devuelta') AND e.tipo IN ('Andamio Estandar','Andamio Plegable') AND (? IS NULL OR r.sucursal = ?)`, suc, suc);
   const porDia = new Map();
   let desde = t;
   for (const f of filas) {
@@ -1080,7 +1081,7 @@ route('GET', /^\/api\/utilizacion$/, () => {
   }
   const dias = [];
   for (let d = desde; d <= t; d = addDays(d, 1)) dias.push({ f: d, ...(porDia.get(d) || { e: 0, p: 0 }) });
-  return { flota: { e: flota('Andamio Estandar'), p: flota('Andamio Plegable') }, desde, hasta: t, dias };
+  return { sucursal: suc, flota: { e: flota('Andamio Estandar'), p: flota('Andamio Plegable') }, desde, hasta: t, dias };
 });
 route('GET', /^\/api\/cotizaciones$/, () => todasCotizaciones());
 route('GET', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => cotizacionPorId(id));

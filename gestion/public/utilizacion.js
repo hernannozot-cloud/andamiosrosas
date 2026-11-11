@@ -4,7 +4,7 @@
 // más largos es el promedio diario: andamios-día en uso ÷ (flota × días). La barra se divide en cuánto aporta
 // cada tipo a la utilización total de la flota; el detalle (al pasar el cursor) trae la de cada tipo por separado.
 // Se carga ANTES de app.js; usa ayudantes de app.js/graficos.js ($, esc, mxn, fecha, api, pasoBonito, etiquetaCubeta…).
-let utilModo = 'dia', utilDias = 30, utilDatos = null;
+let utilModo = 'dia', utilDias = 30, utilDatos = null, utilSucursal = 'todas'; // 'todas' = Toluca + Ensenada
 const pctU = x => { const v = x * 100; return `${v >= 10 || v === 0 ? Math.round(v) : v.toFixed(1)}%`; };
 
 function agregaUtil(filas, F) {
@@ -55,7 +55,7 @@ function svgUtil(items, W) {
 }
 
 async function vUtilizacion() {
-  utilDatos = prepararUtil(await api('GET', '/api/utilizacion'));
+  utilDatos = prepararUtil(await api('GET', `/api/utilizacion${utilSucursal === 'todas' ? '' : `?sucursal=${encodeURIComponent(utilSucursal)}`}`));
   pintarUtilizacion(utilDatos);
 }
 
@@ -71,9 +71,12 @@ function pintarUtilizacion(P) {
     : meses.map(m => ({ ...m, etiqueta: etiquetaCubeta(m.k, 'mes'), linea: m.acumAnio.total,
       tip: textoUtil(`${etiquetaCubeta(m.k, 'mes')} (${m.n} días)`, m, F, `acumulado del año ${pctU(m.acumAnio.total)}`) }));
   const opcionesDias = [30, 60, 90];
+  const nombreSuc = utilSucursal === 'todas' ? 'Toluca + Ensenada' : utilSucursal;
   $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Utilización de la flota</h2><span class="spacer"></span>
+      <select id="sucUtil" style="width:auto" title="Sucursal"><option value="todas" ${utilSucursal === 'todas' ? 'selected' : ''}>Total (Toluca + Ensenada)</option>${SUCURSALES.map(s => `<option value="${s}" ${s === utilSucursal ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <button class="btn" onclick="window.print()">Imprimir / PDF</button></div>
-    <p class="muted">Flota: ${F.e} Andamio Estándar + ${F.p} Andamio Plegable = ${F.e + F.p} andamios · se cuenta desde la primera renta (${fecha(desde)}) · sin accesorios</p>
+    <p class="muted"><b>${esc(nombreSuc)}</b> · Flota: ${F.e} Andamio Estándar + ${F.p} Andamio Plegable = ${F.e + F.p} andamios · se cuenta desde la primera renta${utilSucursal === 'todas' ? '' : ' de la sucursal'} (${fecha(desde)}) · sin accesorios</p>
+    ${utilSucursal !== 'todas' ? '<p class="muted" style="margin-top:-6px">Por sucursal se usa la flota que tiene hoy esa sucursal (lo que se movió de una ciudad a otra cuenta desde el inicio).</p>' : ''}
     <div class="grid">${tarjeta('Hoy', hoy, `<div class="sub">${hoy.e + hoy.p} de ${F.e + F.p} andamios en uso</div>`)}
       ${tarjeta(`Mes en curso (acumulado, ${mesActual.n} días)`, mesActual)}${tarjeta(`Año (acumulado, ${anio.n} días)`, anio)}
       ${anterior ? tarjeta(`Mes anterior (${etiquetaCubeta(anterior.k, 'mes')})`, anterior) : ''}</div>
@@ -92,6 +95,7 @@ function pintarUtilizacion(P) {
   const cont = $('#svgUtil');
   cont.innerHTML = svgUtil(items, Math.max(300, Math.round(cont.clientWidth - 2)));
   $$('[data-um]').forEach(b => b.onclick = () => { utilModo = b.dataset.um; pintarUtilizacion(P); });
+  $('#sucUtil').onchange = e => { utilSucursal = e.target.value; act(vUtilizacion); };
   const sel = $('#utilDias');
   if (sel) sel.onchange = () => { utilDias = Number(sel.value); pintarUtilizacion(P); };
 }
