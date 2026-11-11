@@ -103,7 +103,7 @@ async function abrirCotizacion(id) {
       <button class="btn" type="button" id="editarCot">${c.renta_id ? '✏️ Editar cotización y renta' : '✏️ Editar cotización'}</button>
       ${wa ? `<a class="btn" href="${wa}" target="_blank" rel="noopener">Enviar por WhatsApp</a>` : ''}
       <button class="btn" type="button" id="copiarMsgCot">Copiar mensaje</button>
-      ${c.renta_id ? '' : '<button class="btn danger" id="borrarCot">Borrar cotización</button>'}</div>
+      <button class="btn danger" id="borrarCot">🗑 Eliminar cotización</button></div>
     <p class="muted" style="margin-top:8px">El mensaje sale de la cuenta de WhatsApp que esté abierta en este aparato. En computadora se abre <b>WhatsApp Web</b>: para que salga del número de la empresa, vincula ahí tu cuenta de <b>WhatsApp Business</b> (app empresarial → Dispositivos vinculados). También puedes tocar <b>Copiar mensaje</b> y pegarlo en el chat del cliente dentro de WhatsApp Business.</p>`);
   $('#copiarMsgCot', dlg).onclick = () => copiarTexto(msgCotizacion(c));
   const editar = $('#editarCot', dlg);
@@ -123,7 +123,12 @@ async function abrirCotizacion(id) {
   const ver = $('#verRenta', dlg);
   if (ver) ver.onclick = () => abrirRenta(c.renta_id);
   const borrar = $('#borrarCot', dlg);
-  if (borrar) borrar.onclick = () => act(async () => { if (confirm('¿Borrar esta cotización?')) { await api('DELETE', `/api/cotizaciones/${id}`); dlg.close(); toast('Cotización borrada'); refrescar(); } });
+  if (borrar) borrar.onclick = () => act(async () => {
+    const aviso = c.renta_id
+      ? `¿Eliminar la cotización ${c.folio}? Ya se convirtió en renta: la renta y sus pagos NO se borran. Si el cliente ya no la quiere, primero cancela la renta.`
+      : `¿Eliminar la cotización ${c.folio}? No se puede deshacer.`;
+    if (confirm(aviso)) { await api('DELETE', `/api/cotizaciones/${id}`); dlg.close(); toast(`Cotización ${c.folio} eliminada`); refrescar(); }
+  });
   const conv = $('#fConv', dlg);
   if (conv) conv.onsubmit = async e => {
     e.preventDefault();

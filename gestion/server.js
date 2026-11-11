@@ -103,6 +103,13 @@ if (!colsCot.includes('cerrada_auto')) db.exec('ALTER TABLE cotizaciones ADD COL
 // Migración: sucursal de cada cotización (Toluca o Ensenada). Las que ya existían son de Toluca.
 if (!colsCot.includes('sucursal')) db.exec("ALTER TABLE cotizaciones ADD COLUMN sucursal TEXT NOT NULL DEFAULT 'Toluca'");
 const SUCURSALES = ['Toluca', 'Ensenada'];
+// Migración: sucursal de cada renta. Toma la de su cotización (si viene de una); las demás son de Toluca.
+if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'sucursal')) {
+  db.exec("ALTER TABLE rentas ADD COLUMN sucursal TEXT NOT NULL DEFAULT 'Toluca'");
+  db.exec(`UPDATE rentas SET sucursal = (SELECT q.sucursal FROM cotizaciones q WHERE q.renta_id = rentas.id)
+    WHERE EXISTS (SELECT 1 FROM cotizaciones q WHERE q.renta_id = rentas.id)`);
+}
+const sucursalValida = s => { if (s && !SUCURSALES.includes(String(s))) throw bad('Sucursal inválida'); return s ? String(s) : null; };
 if (!db.prepare('PRAGMA table_info(rentas)').all().some(c => c.name === 'iva_pct')) {
   db.exec('ALTER TABLE rentas ADD COLUMN iva_pct REAL NOT NULL DEFAULT 0');
 }
@@ -287,6 +294,7 @@ function crearRenta(b) {
   const lineas = (Array.isArray(b.items) ? b.items : []).filter(i => Number(i.cantidad) > 0);
   if (!lineas.length) throw bad('Agrega al menos una pieza');
   const extra = Number(b.extra) || 0;
+  const sucursal = sucursalValida(b.sucursal) || 'Toluca';
   return tx(() => {
     let clienteId = Number(b.cliente_id);
     if (!clienteId) {
@@ -310,9 +318,9 @@ function crearRenta(b) {
     });
     const totalAndamios = tiposInfo.filter(t => t.piezas[0].categoria === 'andamio').reduce((s, t) => s + t.cant, 0);
     const ivaPct = Number(b.iva_pct) > 0 ? Number(b.iva_pct) : 0;
-    const rid = Number(run(`INSERT INTO rentas (cliente_id, fecha_inicio, dias, direccion, estado, extra, extra_concepto, notas, iva_pct, creada)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, clienteId, b.fecha_inicio, dias, b.direccion || null, estado, extra,
-      b.extra_concepto || null, b.notas || null, ivaPct, new Date().toISOString()).lastInsertRowid);
+    const rid = Number(run(`INSERT INTO rentas (cliente_id, fecha_inicio, dias, direccion, estado, extra, extra_concepto, notas, iva_pct, creada, sucursal)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`, clienteId, b.fecha_inicio, dias, b.direccion || null, estado, extra,
+      b.extra_concepto || null, b.notas || null, ivaPct, new Date().toISOString(), sucursal).lastInsertRowid);
     run('UPDATE rentas SET folio = ? WHERE id = ?', `R-${String(rid).padStart(4, '0')}`, rid);
     for (const { l, piezas } of tiposInfo) {
       const esAndamio = piezas[0].categoria === 'andamio';
@@ -393,8 +401,7 @@ function prepararCotizacion(b) {
   const clienteId = Number(b.cliente_id) || null;
   if (clienteId && !get('SELECT id FROM clientes WHERE id = ?', clienteId)) throw bad('Cliente no encontrado');
   // Sin sucursal: la nueva queda en Toluca y la editada conserva la suya.
-  const sucursal = b.sucursal ? String(b.sucursal) : null;
-  if (sucursal && !SUCURSALES.includes(sucursal)) throw bad('Sucursal inválida');
+  const sucursal = sucursalValida(b.sucursal);
   return { dias, nombre, fecha, logistico, ivaPct, lineas, subtotal, clienteId, sucursal,
     telefono: String(b.telefono || '').trim() || null, direccion: b.direccion || null,
     traslado: b.fecha_traslado || null, recoleccion: b.fecha_recoleccion || null, notas: b.notas || null };
@@ -458,9 +465,10 @@ function actualizarCotizacion(id, b) {
     for (const l of d.lineas) run('INSERT INTO cotizacion_items (cotizacion_id, tipo, cantidad, precio_dia) VALUES (?,?,?,?)', id, l.tipo, l.cantidad, l.precio);
     if (c.renta_id) {
       const r = get('SELECT extra_concepto FROM rentas WHERE id = ?', c.renta_id);
-      run('UPDATE rentas SET dias = ?, iva_pct = ?, extra = ?, extra_concepto = ?, direccion = COALESCE(?, direccion), fecha_inicio = COALESCE(?, fecha_inicio) WHERE id = ?',
+      run('UPDATE rentas SET dias = ?, iva_pct = ?, extra = ?, extra_concepto = ?, direccion = COALESCE(?, direccion), fecha_inicio = COALESCE(?, fecha_inicio), sucursal = ? WHERE id = ?',
         d.dias, d.ivaPct > 0 ? d.ivaPct : 0, d.logistico,
-        d.logistico > 0 ? (r?.extra_concepto || `Traslado, montaje, desmontaje y recolección (${c.folio})`) : null, d.direccion, nuevoInicio, c.renta_id);
+        d.logistico > 0 ? (r?.extra_concepto || `Traslado, montaje, desmontaje y recolección (${c.folio})`) : null, d.direccion, nuevoInicio,
+        d.sucursal || c.sucursal || 'Toluca', c.renta_id);
       // Piezas (códigos) de la renta: tantas por tipo como diga la cotización. Se quitan las sobrantes y se agregan las que falten,
       // primero las libres en esas fechas (igual que al crear la renta).
       const inicio = nuevoInicio || ren.fecha_inicio;
@@ -491,13 +499,22 @@ function actualizarCotizacion(id, b) {
 }
 
 // ---------- Reportes ----------
-function reportes(desde, hasta) {
-  const rentas = todasRentas().filter(r => r.estado !== 'cancelada' && r.fecha_inicio >= desde && r.fecha_inicio <= hasta);
-  const cobrado = get('SELECT COALESCE(SUM(monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != ? AND p.fecha BETWEEN ? AND ?',
-    'cancelada', desde, hasta).s;
+// sucursal: 'Toluca' o 'Ensenada' para ver solo esa; vacío = total de las dos (y además el desglose por sucursal).
+function reportes(desde, hasta, sucursal = null) {
+  const enPeriodo = todasRentas().filter(r => r.estado !== 'cancelada' && r.fecha_inicio >= desde && r.fecha_inicio <= hasta);
+  const rentas = sucursal ? enPeriodo.filter(r => r.sucursal === sucursal) : enPeriodo;
+  const fSuc = sucursal ? ' AND r.sucursal = ?' : '', pSuc = sucursal ? [sucursal] : [];
+  const cobrado = get(`SELECT COALESCE(SUM(monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != ? AND p.fecha BETWEEN ? AND ?${fSuc}`,
+    'cancelada', desde, hasta, ...pSuc).s;
   const masRentado = all(`SELECT a.tipo, a.categoria, COUNT(*) piezas, SUM(r.dias) pz_dia, SUM(ra.precio_dia * r.dias) ingreso
     FROM renta_activos ra JOIN rentas r ON r.id = ra.renta_id JOIN activos a ON a.id = ra.activo_id
-    WHERE r.estado != 'cancelada' AND r.fecha_inicio BETWEEN ? AND ? GROUP BY a.tipo, a.categoria ORDER BY pz_dia DESC`, desde, hasta);
+    WHERE r.estado != 'cancelada' AND r.fecha_inicio BETWEEN ? AND ?${fSuc} GROUP BY a.tipo, a.categoria ORDER BY pz_dia DESC`, desde, hasta, ...pSuc);
+  const porSucursal = SUCURSALES.map(s => {
+    const rs = enPeriodo.filter(r => r.sucursal === s);
+    return { sucursal: s, rentas: rs.length, facturado: rs.reduce((t, r) => t + r.total, 0),
+      cobrado: get(`SELECT COALESCE(SUM(monto),0) s FROM pagos p JOIN rentas r ON r.id = p.renta_id WHERE r.estado != 'cancelada' AND p.fecha BETWEEN ? AND ? AND r.sucursal = ?`, desde, hasta, s).s,
+      porCobrar: rs.reduce((t, r) => t + Math.max(r.saldo, 0), 0) };
+  });
   const clientes = new Map();
   for (const r of rentas) {
     const c = clientes.get(r.cliente_id) || { nombre: r.cliente_nombre, rentas: 0, total: 0, pagado: 0 };
@@ -507,12 +524,12 @@ function reportes(desde, hasta) {
   // Lo cobrado en el periodo por forma de pago (lo que no tiene forma capturada queda en "sin")
   const porForma = { efectivo: 0, transferencia: 0, sin: 0 };
   for (const x of all(`SELECT COALESCE(p.forma, 'sin') forma, SUM(p.monto) monto FROM pagos p JOIN rentas r ON r.id = p.renta_id
-    WHERE r.estado != 'cancelada' AND p.fecha BETWEEN ? AND ? GROUP BY 1`, desde, hasta)) porForma[x.forma] = x.monto;
+    WHERE r.estado != 'cancelada' AND p.fecha BETWEEN ? AND ?${fSuc} GROUP BY 1`, desde, hasta, ...pSuc)) porForma[x.forma] = x.monto;
   const conFactura = rentas.filter(r => r.facturada);
   const pagadas = rentas.filter(r => r.saldo <= 0.5), conSaldo = rentas.filter(r => r.saldo > 0.5);
   const orden = [...rentas].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio) || a.id - b.id);
   return {
-    desde, hasta, rentas: rentas.length,
+    desde, hasta, sucursal, porSucursal, rentas: rentas.length,
     facturado, cobrado,
     iva: rentas.reduce((s, r) => s + r.iva, 0), sinIva: rentas.reduce((s, r) => s + r.subtotal + r.extra, 0),
     porCobrar: rentas.reduce((s, r) => s + Math.max(r.saldo, 0), 0),
@@ -525,7 +542,7 @@ function reportes(desde, hasta) {
     facturas: { n: conFactura.length, importe: conFactura.reduce((s, r) => s + r.total, 0), sinFactura: rentas.length - conFactura.length },
     conIva: rentas.filter(r => r.iva_pct > 0).length, sinIvaN: rentas.filter(r => !(r.iva_pct > 0)).length,
     detalle: orden.map(r => ({
-      id: r.id, folio: r.folio, cliente: r.cliente_nombre, telefono: r.cliente_telefono, estado: r.estado,
+      id: r.id, folio: r.folio, sucursal: r.sucursal, cliente: r.cliente_nombre, telefono: r.cliente_telefono, estado: r.estado,
       fecha_inicio: r.fecha_inicio, fecha_fin: r.fecha_fin, dias: r.dias,
       piezas: r.grupos.map(g => `${g.cantidad} ${g.tipo}`).join(' · '),
       cobrado: r.subtotal + r.extra, iva: r.iva, total: r.total, pagado: r.pagado, saldo: r.saldo,
@@ -797,9 +814,12 @@ route('PATCH', /^\/api\/rentas\/(\d+)$/, (ctx, id) => {
   const iva = b.iva_pct !== undefined ? Number(b.iva_pct) : r.iva_pct;
   if (!Number.isFinite(iva) || iva < 0 || iva > 100) throw bad('IVA inválido');
   const facturada = b.facturada !== undefined ? (b.facturada ? 1 : 0) : r.facturada;
-  run('UPDATE rentas SET extra = ?, extra_concepto = ?, notas = ?, dias = ?, direccion = ?, iva_pct = ?, facturada = ?, factura_folio = ? WHERE id = ?', extra,
+  const sucursal = sucursalValida(b.sucursal) || r.sucursal;
+  run('UPDATE rentas SET extra = ?, extra_concepto = ?, notas = ?, dias = ?, direccion = ?, iva_pct = ?, facturada = ?, factura_folio = ?, sucursal = ? WHERE id = ?', extra,
     b.extra_concepto ?? r.extra_concepto, b.notas ?? r.notas, dias, b.direccion ?? r.direccion, iva, facturada,
-    b.factura_folio !== undefined ? (String(b.factura_folio).trim() || null) : r.factura_folio, id);
+    b.factura_folio !== undefined ? (String(b.factura_folio).trim() || null) : r.factura_folio, sucursal, id);
+  // La cotización de origen sigue a su renta, para que las dos digan la misma sucursal.
+  if (b.sucursal) run('UPDATE cotizaciones SET sucursal = ? WHERE renta_id = ?', sucursal, id);
   return rentaPorId(id);
 });
 // Equipo entregado (casillas con cantidad por tipo de andamio y accesorio). Cantidad 0 = casilla sin marcar.
@@ -927,13 +947,14 @@ route('DELETE', /^\/api\/pagos\/(\d+)$/, (ctx, id) => {
 route('GET', /^\/api\/reportes$/, (ctx) => {
   const desde = ctx.query.get('desde'), hasta = ctx.query.get('hasta');
   if (!esFecha(desde) || !esFecha(hasta)) throw bad('Periodo inválido');
-  return reportes(desde, hasta);
+  return reportes(desde, hasta, sucursalValida(ctx.query.get('sucursal')));
 });
 
-// Ventas agrupadas por mes de inicio de la renta (con IVA); "cobrado" + "porCobrar" = total.
-route('GET', /^\/api\/ventas-mensuales$/, () => {
+// Ventas agrupadas por mes de inicio de la renta (con IVA); "cobrado" + "porCobrar" = total. Opcional: ?sucursal=Toluca|Ensenada.
+route('GET', /^\/api\/ventas-mensuales$/, (ctx) => {
+  const suc = sucursalValida(ctx.query.get('sucursal'));
   const meses = new Map();
-  for (const r of todasRentas().filter(x => x.estado !== 'cancelada')) {
+  for (const r of todasRentas().filter(x => x.estado !== 'cancelada' && (!suc || x.sucursal === suc))) {
     const k = r.fecha_inicio.slice(0, 7);
     const b = meses.get(k) || { mes: k, rentas: 0, total: 0, sinIva: 0, iva: 0, cobrado: 0, porCobrar: 0 };
     const pendiente = Math.max(r.saldo, 0);
@@ -1030,7 +1051,7 @@ route('PATCH', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
 route('DELETE', /^\/api\/cotizaciones\/(\d+)$/, (ctx, id) => {
   const c = get('SELECT renta_id FROM cotizaciones WHERE id = ?', id);
   if (!c) throw new HttpError(404, 'Cotización no encontrada');
-  if (c.renta_id) throw bad('No se puede borrar: ya se convirtió en renta');
+  // Una cotización ya convertida también se puede borrar: solo se borra la cotización; su renta (y sus pagos) se conservan.
   run('DELETE FROM cotizaciones WHERE id = ?', id);
   return { ok: true };
 });
@@ -1059,7 +1080,7 @@ route('POST', /^\/api\/cotizaciones\/(\d+)\/convertir$/, (ctx, id) => {
     dias: c.dias, estado: ctx.body.estado === 'activa' ? 'activa' : 'apartada', direccion: c.direccion,
     items: c.items.map(i => ({ tipo: i.tipo, cantidad: i.cantidad, precio_dia: i.precio_dia })),
     extra: c.logistico, extra_concepto: c.logistico ? `Traslado, montaje, desmontaje y recolección (${c.folio})` : null, iva_pct: c.iva_pct,
-    notas: `Cotización ${c.folio}${c.notas ? ' · ' + c.notas : ''}`,
+    notas: `Cotización ${c.folio}${c.notas ? ' · ' + c.notas : ''}`, sucursal: c.sucursal,
   });
   const cli = get('SELECT cliente_id FROM rentas WHERE id = ?', rid).cliente_id;
   run("UPDATE cotizaciones SET estatus = 'Contratada', renta_id = ?, cliente_id = ?, cerrada_auto = NULL WHERE id = ?", rid, cli, id);

@@ -114,10 +114,10 @@ function svgGraficoVentas(cubs, W) {
 }
 
 // Pinta la gráfica de ventas por mes dentro del contenedor indicado (Resumen y Reportes).
-async function pintarGraficoVentas(selector) {
+async function pintarGraficoVentas(selector, sucursal = null) {
   const cont = $(selector);
   if (!cont) return;
-  const datos = await api('GET', '/api/ventas-mensuales');
+  const datos = await api('GET', `/api/ventas-mensuales${sucursal ? `?sucursal=${encodeURIComponent(sucursal)}` : ''}`);
   if (!datos.length) { cont.innerHTML = '<div class="card"><h3 style="margin:0 0 6px">Ventas por mes</h3><p class="muted">Aún no hay ventas registradas.</p></div>'; return; }
   const cubs = cubetasVentas(datos);
   const total = cubs.reduce((s, b) => s + b.total, 0), mejor = cubs.reduce((a, b) => (b.total > a.total ? b : a), cubs[0]);

@@ -84,7 +84,7 @@ function badgeRenta(r) {
 }
 const piezasTxt = r => r.grupos.map(g => `${g.cantidad} ${esc(g.tipo)}`).join(' · ');
 function rowRenta(r) {
-  return `<div class="row" data-renta="${r.id}"><div class="grow"><div class="t">${esc(r.cliente_nombre)} <span class="muted">${esc(r.folio)}</span></div>
+  return `<div class="row" data-renta="${r.id}"><div class="grow"><div class="t">${esc(r.cliente_nombre)} <span class="muted">${esc(r.folio)}</span> ${badgeSuc(r.sucursal)}</div>
     <div class="s">${piezasTxt(r)}</div></div><div style="text-align:right">${badgeRenta(r)}${r.facturada ? ' <span class="badge info">Factura</span>' : ''}
     ${r.saldo > 0 && r.estado !== 'cancelada' ? `<div class="money" style="color:var(--bad);font-size:.85rem">Debe ${mxn(r.saldo)}</div>` : ''}</div></div>`;
 }
@@ -148,7 +148,8 @@ async function abrirRenta(id) {
   const tiposEq = r.estado === 'cancelada' ? [] : [...(await act(() => api('GET', '/api/tipos')) || [])]
     .sort((a, b) => (a.categoria === 'andamio' ? 0 : 1) - (b.categoria === 'andamio' ? 0 : 1) || a.tipo.localeCompare(b.tipo));
   abrirDlg(`${dlgHead(`${esc(r.folio)} · ${esc(r.cliente_nombre)}`)}
-    <p>${badgeRenta(r)} <span class="muted">${fecha(r.fecha_inicio)} → ${fecha(r.fecha_fin)} (${r.dias} día${r.dias > 1 ? 's' : ''})</span></p>
+    <p>${badgeRenta(r)} <span class="muted">${fecha(r.fecha_inicio)} → ${fecha(r.fecha_fin)} (${r.dias} día${r.dias > 1 ? 's' : ''})</span>
+      <select id="sucRenta" style="width:auto;margin-left:6px" title="Sucursal">${SUCURSALES.map(s => `<option ${s === (r.sucursal || 'Toluca') ? 'selected' : ''}>${s}</option>`).join('')}</select></p>
     ${r.cliente_telefono ? `<p class="muted">📞 ${esc(r.cliente_telefono)}</p>` : ''}${r.direccion ? `<p class="muted">📍 ${esc(r.direccion)}</p>` : ''}
     <table><tr><th>Pieza</th><th class="r">Cant.</th><th class="r">$/día</th></tr>
       ${r.grupos.map(g => `<tr><td>${esc(g.tipo)}<div class="muted">${esc(g.codigos.join(', '))}</div></td><td class="r">${g.cantidad}</td><td class="r">${mxn(g.precio_dia)}</td></tr>`).join('')}</table>
@@ -209,6 +210,8 @@ async function abrirRenta(id) {
   accion('#cancelar', async () => { if (!confirm('¿Cancelar esta renta? Las piezas quedarán libres. Si viene de una cotización, esta pasará a "No contratada".')) throw new Error('Cancelación abortada'); await api('POST', `/api/rentas/${id}/cancelar`, {}); });
   accion('#liquidar', () => api('POST', `/api/rentas/${id}/pagos`, { monto: r.saldo, tipo: 'pago', nota: 'Liquidación', forma: $('#fPago', dlg).elements.forma.value }));
   $('#copiarMsgRenta', dlg).onclick = () => copiarTexto(msg);
+  const sucRenta = $('#sucRenta', dlg);
+  if (sucRenta) sucRenta.onchange = () => act(async () => { await api('PATCH', `/api/rentas/${id}`, { sucursal: sucRenta.value }); toast(`Renta movida a ${sucRenta.value}`); reabrir(); });
   const chkIva = $('#chkIva', dlg);
   if (chkIva) chkIva.onchange = () => act(async () => { await api('PATCH', `/api/rentas/${id}`, { iva_pct: chkIva.checked ? 16 : 0 }); toast(chkIva.checked ? 'IVA agregado' : 'Sin IVA'); reabrir(); });
   $$('[data-forma]', dlg).forEach(s => s.onchange = () => act(async () => { await api('PATCH', `/api/pagos/${s.dataset.forma}`, { forma: s.value }); toast('Forma de pago actualizada'); reabrir(); }));
@@ -300,6 +303,8 @@ async function nuevaRenta() {
   const st = { tipos: [], fetchId: 0 };
   abrirDlg(`${dlgHead('Nueva renta')}
     <form id="fNueva">
+      <label>Sucursal</label>
+      <select name="sucursal" required>${SUCURSALES.map(s => `<option ${s === ultimaSucursal() ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label>Cliente</label>
       <select name="cliente_id"><option value="">➕ Cliente nuevo</option>${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.telefono ? ' · ' + esc(c.telefono) : ''}</option>`).join('')}</select>
       <div id="nuevoCli" class="f2"><div><label>Nombre</label><input name="cnombre"></div><div><label>Teléfono / WhatsApp</label><input name="ctel" inputmode="tel"></div></div>
@@ -363,8 +368,9 @@ async function nuevaRenta() {
   form.onsubmit = async e => {
     e.preventDefault();
     const items = $$('.pick[data-tipo]', form).map(el => ({ tipo: el.dataset.tipo, cantidad: parseInt($('.q', el).value, 10) || 0, precio_dia: $('.p', el).value }));
+    recordarSucursal(val('sucursal'));
     const body = {
-      cliente_id: val('cliente_id') || null, cliente: { nombre: val('cnombre'), telefono: val('ctel') },
+      sucursal: val('sucursal'), cliente_id: val('cliente_id') || null, cliente: { nombre: val('cnombre'), telefono: val('ctel') },
       fecha_inicio: val('fecha_inicio'), dias: Number(val('dias')), estado: val('estado'), direccion: val('direccion'),
       extra: val('extra'), extra_concepto: val('extra_concepto'), notas: val('notas'), items, iva_pct: form.elements.iva.checked ? 16 : 0,
     };
