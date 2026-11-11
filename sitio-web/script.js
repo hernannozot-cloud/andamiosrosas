@@ -38,7 +38,7 @@ document.querySelectorAll('a[href*="wa.me/"]').forEach(a => {
     a.href = u.toString();
   } catch (e) {}
 });
-const { TOLUCA_LAT, TOLUCA_LON, RADIO_ENTREGA_GRATIS_KM, precioAndamioPorDia, distanciaKm, formatoMXN, normalizarTelefonoE164 } = AR;
+const { zonaEntregaGratis, precioAndamioPorDia, formatoMXN, normalizarTelefonoE164 } = AR;
 
 // Zonas mas alejadas: por costo/logistica de entrega se maneja un minimo de
 // dias de renta mas alto que el general (DIAS_MINIMOS).
@@ -176,11 +176,8 @@ function calcularTotal() {
     quoteTotalAccesorios.hidden = true;
   }
 
-  let dentroDeZona = false;
-  if (zonaCoords) {
-    const dist = distanciaKm(TOLUCA_LAT, TOLUCA_LON, zonaCoords.lat, zonaCoords.lon);
-    dentroDeZona = dist <= RADIO_ENTREGA_GRATIS_KM;
-  }
+  // Toluca o Ensenada (y sus zonas conurbadas): traslado, armado, desmontaje y recolección sin costo
+  const dentroDeZona = !!(zonaCoords && zonaEntregaGratis(zonaCoords.lat, zonaCoords.lon));
 
   if (dentroDeZona) {
     quoteTotalDelivery.textContent = '¡Traslado, Armado, Desmontaje y Recolección GRATIS!';
@@ -253,8 +250,11 @@ zonaInput.addEventListener('input', () => {
     if (zonaAbortController) zonaAbortController.abort();
     zonaAbortController = new AbortController();
 
-    // Soft bias toward Estado de México + CDMX (viewbox) without excluding matches elsewhere (bounded=0)
-    const viewbox = '-100.60,20.29,-98.85,18.35';
+    // Soft bias toward the zone being typed (viewbox) without excluding matches elsewhere (bounded=0):
+    // Ensenada, B.C. si el texto la menciona; Estado de México + CDMX en los demás casos.
+    const viewbox = /ensenada|sauzal|valle verde|valle dorado|chapultepec|baja california|maneadero|\bb\.?\s?c\.?\b/i.test(normalizarTexto(query))
+      ? '-117.20,32.30,-115.90,31.50'
+      : '-100.60,20.29,-98.85,18.35';
     const url = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=mx&limit=5&addressdetails=0&accept-language=es&viewbox=${viewbox}&bounded=0&q=${encodeURIComponent(query)}`;
 
     try {

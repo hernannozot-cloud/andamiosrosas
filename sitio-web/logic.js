@@ -23,6 +23,12 @@
   const TOLUCA_LAT = 19.2926;
   const TOLUCA_LON = -99.6568;
   const RADIO_ENTREGA_GRATIS_KM = 20;
+  // Zonas con traslado, armado, desmontaje y recolección sin costo: un centro y su radio.
+  // Ensenada cubre la ciudad y su zona conurbada (El Sauzal, Valle Verde, Valle Dorado, Chapultepec).
+  const ZONAS_ENTREGA_GRATIS = [
+    { nombre: 'Toluca', lat: TOLUCA_LAT, lon: TOLUCA_LON, radioKm: RADIO_ENTREGA_GRATIS_KM },
+    { nombre: 'Ensenada', lat: 31.8667, lon: -116.5963, radioKm: 15 },
+  ];
   const FEEDBACK_MAX_RATING = 5;
 
   // Precio por andamio/día según la duración de la renta y la cantidad total de
@@ -42,6 +48,11 @@
       Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
       Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Zona de entrega gratis a la que pertenece un punto (o null si queda fuera de todas).
+  function zonaEntregaGratis(lat, lon) {
+    return ZONAS_ENTREGA_GRATIS.find(z => distanciaKm(z.lat, z.lon, lat, lon) <= z.radioKm) || null;
   }
 
   function formatoMXN(n) {
@@ -87,9 +98,11 @@
     TOLUCA_LAT,
     TOLUCA_LON,
     RADIO_ENTREGA_GRATIS_KM,
+    ZONAS_ENTREGA_GRATIS,
     FEEDBACK_MAX_RATING,
     precioAndamioPorDia,
     distanciaKm,
+    zonaEntregaGratis,
     formatoMXN,
     normalizarTelefonoE164,
     validateFeedback,

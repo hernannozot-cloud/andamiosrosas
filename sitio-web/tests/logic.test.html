@@ -50,6 +50,14 @@
   const distCdmx = AR.distanciaKm(AR.TOLUCA_LAT, AR.TOLUCA_LON, 19.4326, -99.1332);
   assertTrue(distCdmx > 40 && distCdmx < 80, 'distanciaKm(Toluca, CDMX) is in a plausible range (' + distCdmx.toFixed(1) + 'km)');
 
+  // zonaEntregaGratis — Toluca y Ensenada (con su zona conurbada) tienen entrega sin costo
+  assertEqual((AR.zonaEntregaGratis(AR.TOLUCA_LAT, AR.TOLUCA_LON) || {}).nombre, 'Toluca', 'zonaEntregaGratis: el centro de Toluca es zona gratis');
+  assertEqual((AR.zonaEntregaGratis(31.8667, -116.5963) || {}).nombre, 'Ensenada', 'zonaEntregaGratis: el centro de Ensenada es zona gratis');
+  assertEqual((AR.zonaEntregaGratis(31.8833, -116.6833) || {}).nombre, 'Ensenada', 'zonaEntregaGratis: El Sauzal queda dentro de la zona de Ensenada');
+  assertEqual((AR.zonaEntregaGratis(31.8139, -116.5311) || {}).nombre, 'Ensenada', 'zonaEntregaGratis: Valle Dorado queda dentro de la zona de Ensenada');
+  assertEqual(AR.zonaEntregaGratis(32.5149, -117.0382), null, 'zonaEntregaGratis: Tijuana queda fuera');
+  assertEqual(AR.zonaEntregaGratis(19.4326, -99.1332), null, 'zonaEntregaGratis: CDMX queda fuera');
+
   // validateFeedback
   assertEqual(AR.validateFeedback({ rating: 0, comentario: '' }), { valid: false, error: 'Agrega una calificación o un comentario antes de enviar.' }, 'validateFeedback rejects empty rating and comment');
   assertEqual(AR.validateFeedback({ rating: 0, comentario: '   ' }), { valid: false, error: 'Agrega una calificación o un comentario antes de enviar.' }, 'validateFeedback rejects whitespace-only comment with no rating');
