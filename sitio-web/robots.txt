@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /enviar-lead.php
 
-Sitemap: https://andamiosrosas.com/sitemap.xml
+Sitemap: https://www.andamiosrosas.com/sitemap.xml
