@@ -117,9 +117,11 @@ async function vResumen() {
 }
 
 // ---------- Rentas ----------
-let filtroRentas = 'activas';
+let filtroRentas = 'activas', sucursalRentas = 'todas';
 async function vRentas() {
-  const rentas = await api('GET', '/api/rentas');
+  const todasR = await api('GET', '/api/rentas');
+  // El filtro de sucursal aplica a todo el apartado: los conteos de cada estatus, la lista y la suma.
+  const rentas = sucursalRentas === 'todas' ? todasR : todasR.filter(r => (r.sucursal || 'Toluca') === sucursalRentas);
   const filtros = {
     activas: ['Activas', r => r.estado === 'activa'], apartadas: ['Apartadas', r => r.estado === 'apartada'],
     saldo: ['Con saldo', r => r.saldo > 0 && r.estado !== 'cancelada'], devueltas: ['Devueltas', r => r.estado === 'devuelta'],
@@ -136,10 +138,13 @@ async function vRentas() {
         <div class="s">Pagado ${mxn(s('pagado'))} · <span style="color:${s('saldo') > 0.5 ? 'var(--bad)' : 'inherit'}">Por cobrar ${mxn(Math.max(0, sumables.reduce((t, r) => t + Math.max(r.saldo, 0), 0)))}</span>${hayEnsenada ? ` · Ventas Andamios Rosas ${mxn(s('venta_ar'))}` : ''}</div></div>
       <div style="text-align:right"><div class="muted" style="font-size:.8rem">Total</div><div class="money" style="font-size:1.15rem"><b>${mxn(s('total'))}</b></div></div></div>` : '';
   $('#main').innerHTML = `
-    <div class="toolbar"><h2 style="margin:0">Rentas</h2><span class="spacer"></span><button id="nueva" class="btn primary">+ Nueva renta</button></div>
+    <div class="toolbar"><h2 style="margin:0">Rentas</h2>
+      <select id="sucRentas" style="width:auto" title="Sucursal"><option value="todas">Todas las sucursales</option>${SUCURSALES.map(s => `<option value="${s}" ${s === sucursalRentas ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <span class="spacer"></span><button id="nueva" class="btn primary">+ Nueva renta</button></div>
     <div class="toolbar">${Object.entries(filtros).map(([k, [n]]) => `<button class="chip ${k === filtroRentas ? 'on' : ''}" data-f="${k}">${n} (${rentas.filter(filtros[k][1]).length})</button>`).join('')}</div>
     <div class="card">${lista.length ? lista.map(rowRenta).join('') + sumaRentas : '<p class="muted">No hay rentas en esta vista.</p>'}</div>`;
   $$('[data-f]').forEach(b => b.onclick = () => { filtroRentas = b.dataset.f; refrescar(); });
+  $('#sucRentas').onchange = e => { sucursalRentas = e.target.value; refrescar(); };
   $('#nueva').onclick = () => act(nuevaRenta);
   enlazarRentas($('#main'));
 }
@@ -313,7 +318,7 @@ async function nuevaRenta() {
   abrirDlg(`${dlgHead('Nueva renta')}
     <form id="fNueva">
       <label>Sucursal</label>
-      <select name="sucursal" required>${SUCURSALES.map(s => `<option ${s === ultimaSucursal() ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <select name="sucursal" required>${SUCURSALES.map(s => `<option ${s === (sucursalRentas !== 'todas' ? sucursalRentas : ultimaSucursal()) ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label>Cliente</label>
       <select name="cliente_id"><option value="">➕ Cliente nuevo</option>${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.telefono ? ' · ' + esc(c.telefono) : ''}</option>`).join('')}</select>
       <div id="nuevoCli" class="f2"><div><label>Nombre</label><input name="cnombre"></div><div><label>Teléfono / WhatsApp</label><input name="ctel" inputmode="tel"></div></div>
