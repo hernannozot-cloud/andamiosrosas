@@ -50,7 +50,13 @@ async function vCotizaciones() {
   const pintar = () => {
     const q = busquedaCot.trim().toLowerCase();
     const lista = cots.filter(c => (filtroCot === 'todas' || c.estatus === filtroCot) && (!q || `${c.nombre} ${c.folio}`.toLowerCase().includes(q)));
-    $('#listaCot').innerHTML = lista.map(rowCot).join('') || '<p class="muted">No hay cotizaciones en esta vista.</p>';
+    // Suma de lo que se ve en la lista (respeta estatus, sucursal y búsqueda).
+    const s = k => lista.reduce((t, c) => t + (Number(c[k]) || 0), 0);
+    const sumaCot = lista.length ? `<div class="row" style="cursor:default;background:#fdf1f6;border-top:2px solid var(--pink);margin-top:4px">
+      <div class="grow"><div class="t">SUMA · ${lista.length} cotizaci${lista.length === 1 ? 'ón' : 'ones'}</div>
+        <div class="s">Renta ${mxn(s('subtotal'))} · Logística ${mxn(s('logistico'))} · IVA ${mxn(s('iva'))}</div></div>
+      <div style="text-align:right"><div class="muted" style="font-size:.8rem">Total</div><div class="money" style="font-size:1.15rem"><b>${mxn(s('total'))}</b></div></div></div>` : '';
+    $('#listaCot').innerHTML = lista.length ? lista.map(rowCot).join('') + sumaCot : '<p class="muted">No hay cotizaciones en esta vista.</p>';
     $$('[data-cot]', $('#listaCot')).forEach(el => el.onclick = () => abrirCotizacion(Number(el.dataset.cot)));
   };
   pintar();
