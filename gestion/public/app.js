@@ -126,10 +126,19 @@ async function vRentas() {
     todas: ['Todas', () => true],
   };
   const lista = rentas.filter(filtros[filtroRentas][1]);
+  // Suma de la lista (las canceladas no cuentan). En Ensenada, "Andamios Rosas" es solo su 60% de la renta.
+  const sumables = lista.filter(r => r.estado !== 'cancelada');
+  const s = k => sumables.reduce((t, r) => t + (Number(r[k]) || 0), 0);
+  const canceladas = lista.length - sumables.length;
+  const hayEnsenada = sumables.some(r => r.sucursal === 'Ensenada');
+  const sumaRentas = sumables.length ? `<div class="row" style="cursor:default;background:#fdf1f6;border-top:2px solid var(--pink);margin-top:4px">
+      <div class="grow"><div class="t">SUMA · ${sumables.length} renta${sumables.length === 1 ? '' : 's'}${canceladas ? ` <span class="muted" style="font-weight:400">(sin ${canceladas} cancelada${canceladas === 1 ? '' : 's'})</span>` : ''}</div>
+        <div class="s">Pagado ${mxn(s('pagado'))} · <span style="color:${s('saldo') > 0.5 ? 'var(--bad)' : 'inherit'}">Por cobrar ${mxn(Math.max(0, sumables.reduce((t, r) => t + Math.max(r.saldo, 0), 0)))}</span>${hayEnsenada ? ` · Ventas Andamios Rosas ${mxn(s('venta_ar'))}` : ''}</div></div>
+      <div style="text-align:right"><div class="muted" style="font-size:.8rem">Total</div><div class="money" style="font-size:1.15rem"><b>${mxn(s('total'))}</b></div></div></div>` : '';
   $('#main').innerHTML = `
     <div class="toolbar"><h2 style="margin:0">Rentas</h2><span class="spacer"></span><button id="nueva" class="btn primary">+ Nueva renta</button></div>
     <div class="toolbar">${Object.entries(filtros).map(([k, [n]]) => `<button class="chip ${k === filtroRentas ? 'on' : ''}" data-f="${k}">${n} (${rentas.filter(filtros[k][1]).length})</button>`).join('')}</div>
-    <div class="card">${lista.map(rowRenta).join('') || '<p class="muted">No hay rentas en esta vista.</p>'}</div>`;
+    <div class="card">${lista.length ? lista.map(rowRenta).join('') + sumaRentas : '<p class="muted">No hay rentas en esta vista.</p>'}</div>`;
   $$('[data-f]').forEach(b => b.onclick = () => { filtroRentas = b.dataset.f; refrescar(); });
   $('#nueva').onclick = () => act(nuevaRenta);
   enlazarRentas($('#main'));
