@@ -457,12 +457,22 @@ async function abrirTipo(tipo) {
 }
 
 // ---------- Clientes ----------
+// Filtro de sucursal: un cliente aparece en las sucursales donde ha rentado o cotizado, con las rentas y saldos de esa ciudad.
+// Los clientes sin rentas ni cotizaciones solo aparecen en "Todas".
+let sucursalCli = 'todas';
 async function vClientes() {
-  const cs = await api('GET', '/api/clientes');
-  $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Clientes</h2><span class="spacer"></span><button id="nuevoCliente" class="btn primary">+ Nuevo cliente</button></div>
-    <div class="card">${cs.map(c => `<div class="row" data-cli="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)}</div>
+  const todosC = await api('GET', '/api/clientes');
+  const cs = sucursalCli === 'todas' ? todosC
+    : todosC.filter(c => (c.sucursales || []).includes(sucursalCli)).map(c => ({ ...c, ...c.porSucursal[sucursalCli] }));
+  const sinSucursal = todosC.filter(c => !(c.sucursales || []).length).length;
+  $('#main').innerHTML = `<div class="toolbar"><h2 style="margin:0">Clientes</h2>
+      <select id="sucCli" style="width:auto" title="Sucursal"><option value="todas">Todas las sucursales</option>${SUCURSALES.map(s => `<option value="${s}" ${s === sucursalCli ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <span class="spacer"></span><button id="nuevoCliente" class="btn primary">+ Nuevo cliente</button></div>
+    ${sucursalCli !== 'todas' && sinSucursal ? `<p class="muted">${sinSucursal} cliente${sinSucursal === 1 ? '' : 's'} sin rentas ni cotizaciones solo aparece${sinSucursal === 1 ? '' : 'n'} en "Todas las sucursales".</p>` : ''}
+    <div class="card">${cs.map(c => `<div class="row" data-cli="${c.id}"><div class="grow"><div class="t">${esc(c.nombre)} ${(c.sucursales || []).map(badgeSuc).join(' ')}</div>
       <div class="s">${esc(c.telefono || 'Sin teléfono')} · ${c.rentas} renta${c.rentas === 1 ? '' : 's'}</div></div>
-      <div style="text-align:right"><div class="money">${mxn(c.total)}</div>${c.saldo > 0 ? `<div class="money" style="color:var(--bad);font-size:.85rem">Debe ${mxn(c.saldo)}</div>` : ''}</div></div>`).join('') || '<p class="muted">Aún no hay clientes.</p>'}</div>`;
+      <div style="text-align:right"><div class="money">${mxn(c.total)}</div>${c.saldo > 0 ? `<div class="money" style="color:var(--bad);font-size:.85rem">Debe ${mxn(c.saldo)}</div>` : ''}</div></div>`).join('') || '<p class="muted">No hay clientes en esta vista.</p>'}</div>`;
+  $('#sucCli').onchange = e => { sucursalCli = e.target.value; refrescar(); };
   const form = c => { abrirDlg(`${dlgHead(c ? 'Editar cliente' : 'Nuevo cliente')}<form id="fCli">
       <label>Nombre</label><input name="nombre" required value="${esc(c?.nombre || '')}">
       <label>Teléfono / WhatsApp</label><input name="telefono" inputmode="tel" value="${esc(c?.telefono || '')}">

@@ -844,11 +844,20 @@ route('PATCH', /^\/api\/activos\/(\d+)$/, (ctx, id) => {
   return { ok: true };
 });
 
+// Cada cliente trae sus números totales y por sucursal. Un cliente "es" de las sucursales donde ha rentado o cotizado.
 route('GET', /^\/api\/clientes$/, () => {
   const rentas = todasRentas().filter(r => r.estado !== 'cancelada');
+  const cotSuc = new Map();
+  for (const q of all('SELECT DISTINCT cliente_id, sucursal FROM cotizaciones WHERE cliente_id IS NOT NULL')) {
+    if (!cotSuc.has(q.cliente_id)) cotSuc.set(q.cliente_id, new Set());
+    cotSuc.get(q.cliente_id).add(q.sucursal || 'Toluca');
+  }
+  const numeros = rs => ({ rentas: rs.length, total: rs.reduce((s, r) => s + r.total, 0), saldo: rs.reduce((s, r) => s + Math.max(r.saldo, 0), 0) });
   return all('SELECT * FROM clientes ORDER BY nombre COLLATE NOCASE').map(c => {
     const rs = rentas.filter(r => r.cliente_id === c.id);
-    return { ...c, rentas: rs.length, total: rs.reduce((s, r) => s + r.total, 0), saldo: rs.reduce((s, r) => s + Math.max(r.saldo, 0), 0) };
+    const sucursales = SUCURSALES.filter(s => rs.some(r => r.sucursal === s) || cotSuc.get(c.id)?.has(s));
+    return { ...c, ...numeros(rs), sucursales,
+      porSucursal: Object.fromEntries(SUCURSALES.map(s => [s, numeros(rs.filter(r => r.sucursal === s))])) };
   });
 });
 route('POST', /^\/api\/clientes$/, (ctx) => {
