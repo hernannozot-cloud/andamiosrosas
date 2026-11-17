@@ -408,9 +408,20 @@ async function vInventario() {
       ${t.foto ? `<img class="thumb" src="${t.foto}" alt="">` : '<div class="thumb"></div>'}
       <div class="grow"><div class="t">${esc(t.tipo)}</div><div class="s">${t.total} piezas${sucursalInv === 'todas' ? ` · Toluca ${t.porSucursal.Toluca} · Ensenada ${t.porSucursal.Ensenada}` : ''}</div></div></div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><span class="badge ok">${t.disponibles} libres hoy</span>
-        <span class="badge info">${t.rentados} en renta</span>${t.mantenimiento ? `<span class="badge warn">${t.mantenimiento} mantenimiento</span>` : ''}${t.baja ? `<span class="badge">${t.baja} baja</span>` : ''}</div></div>`).join('')}</div>`;
+        <span class="badge info">${t.rentados} en renta</span>${t.mantenimiento ? `<span class="badge warn">${t.mantenimiento} mantenimiento</span>` : ''}${t.baja ? `<span class="badge">${t.baja} baja</span>` : ''}</div></div>`).join('')}</div>
+    ${tipos.length ? sumaInventario(tipos) : ''}`;
   $$('[data-tipo]', $('#main')).forEach(c => c.onclick = () => act(() => abrirTipo(c.dataset.tipo)));
   $('#sucInv').onchange = e => { sucursalInv = e.target.value; refrescar(); };
+}
+// Suma de las tarjetas del inventario (de la sucursal elegida): piezas, libres hoy, en renta, mantenimiento y baja,
+// con el desglose andamios / accesorios.
+function sumaInventario(tipos) {
+  const s = (k, cat) => tipos.filter(t => !cat || t.categoria === cat).reduce((a, t) => a + (Number(t[k]) || 0), 0);
+  const fila = (nombre, cat, fuerte) => `<tr${fuerte ? ' style="background:#fdf1f6;font-weight:700"' : ''}><td>${nombre}</td><td class="r">${s('total', cat)}</td>
+    <td class="r" style="color:var(--ok)">${s('disponibles', cat)}</td><td class="r">${s('rentados', cat)}</td><td class="r">${s('mantenimiento', cat)}</td><td class="r">${s('baja', cat)}</td></tr>`;
+  return `<div class="card tabla-scroll" style="margin-top:14px;border-top:3px solid var(--pink)"><h3 style="margin-top:0">SUMA${sucursalInv === 'todas' ? '' : ` · ${esc(sucursalInv)}`}</h3>
+    <table><thead><tr><th></th><th class="r">Piezas</th><th class="r">Libres hoy</th><th class="r">En renta</th><th class="r">Mantenimiento</th><th class="r">Baja</th></tr></thead>
+    <tbody>${fila('Andamios', 'andamio')}${fila('Accesorios', 'accesorio')}${fila('Total', null, true)}</tbody></table></div>`;
 }
 async function abrirTipo(tipo) {
   const qt = encodeURIComponent(tipo);
